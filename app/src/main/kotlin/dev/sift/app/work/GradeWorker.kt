@@ -136,6 +136,9 @@ class GradeWorker @AssistedInject constructor(
             width = result.width,
             height = result.height,
             sourceUri = uri,
+            // The graded frame is the same photograph, so it belongs on the same
+            // day in the gallery as the original — not on the day it was graded.
+            dateTakenMillis = mediaAssets.byId(assetId)?.dateTaken,
         )
 
         mediaAssets.setAnalysis(

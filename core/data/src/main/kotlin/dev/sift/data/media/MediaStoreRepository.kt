@@ -226,6 +226,18 @@ class MediaStoreRepository @Inject constructor(
         width: Int,
         height: Int,
         sourceUri: Uri?,
+        /**
+         * The original capture time, in epoch millis.
+         *
+         * **This is not the same thing as copying EXIF.** §2.5 requires the EXIF
+         * block to carry over, and it does — but gallery apps do not sort by
+         * EXIF. They sort by MediaStore's own `DATE_TAKEN` column, which the
+         * system fills with "now" for any newly inserted row unless it is set
+         * explicitly. Copying EXIF alone produces exports that are internally
+         * correct and yet pile up at the top of the gallery dated today,
+         * detached from the day they were actually shot.
+         */
+        dateTakenMillis: Long?,
     ): Uri? {
         val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val values = ContentValues().apply {
@@ -235,6 +247,12 @@ class MediaStoreRepository @Inject constructor(
             put(MediaStore.Images.Media.WIDTH, width)
             put(MediaStore.Images.Media.HEIGHT, height)
             put(MediaStore.Images.Media.IS_PENDING, 1)
+            if (dateTakenMillis != null && dateTakenMillis > 0) {
+                put(MediaStore.Images.Media.DATE_TAKEN, dateTakenMillis)
+                // DATE_MODIFIED is in seconds, not millis. Setting it keeps the
+                // export beside its original under "recently modified" sorts too.
+                put(MediaStore.Images.Media.DATE_MODIFIED, dateTakenMillis / 1000)
+            }
         }
 
         val uri = resolver.insert(collection, values) ?: return null

@@ -71,6 +71,17 @@ interface MediaAssetDao {
     @Query("UPDATE media_assets SET seenAt = :at WHERE id = :id")
     suspend fun markSeen(id: Long, at: Long)
 
+    /**
+     * Put an asset back in the deck.
+     *
+     * Must set `seenAt` to NULL, not to 0: the deck query filters on
+     * `seenAt IS NULL`, so a zero timestamp still reads as "already triaged"
+     * and the photo would vanish from the deck permanently even though its
+     * decision had been reversed.
+     */
+    @Query("UPDATE media_assets SET seenAt = NULL WHERE id = :id")
+    suspend fun clearSeen(id: Long)
+
     @Query("UPDATE media_assets SET clusterId = :clusterId WHERE id = :id")
     suspend fun setCluster(id: Long, clusterId: String?)
 
@@ -113,6 +124,28 @@ interface TriageDecisionDao {
     /** Undo support — §8 requires the last ten decisions to be reversible. */
     @Query("SELECT * FROM triage_decisions ORDER BY decidedAt DESC LIMIT :limit")
     suspend fun mostRecent(limit: Int): List<TriageDecision>
+
+    /**
+     * Uncommitted decisions, newest first, as a live count.
+     *
+     * Undo availability is derived from this rather than from an in-memory
+     * stack: a ViewModel-scoped stack silently empties on process death or a
+     * screen rotation, so the undo control would disappear while the decisions
+     * it would reverse are still sitting in the database.
+     */
+    @Query("SELECT COUNT(*) FROM triage_decisions WHERE committed = 0")
+    fun uncommittedCount(): Flow<Int>
+
+    /** The photos currently queued for deletion, so one can be pulled back out. */
+    @Query(
+        """
+        SELECT a.* FROM media_assets a
+        INNER JOIN triage_decisions d ON d.assetId = a.id
+        WHERE d.committed = 0 AND d.verdict = :verdict
+        ORDER BY d.decidedAt DESC
+        """,
+    )
+    fun pendingWithVerdict(verdict: Verdict): Flow<List<MediaAsset>>
 }
 
 @Dao

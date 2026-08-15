@@ -32,6 +32,7 @@ import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
 import dev.sift.app.ui.SiftNav
 import dev.sift.app.ui.grid.GridScreen
+import dev.sift.app.ui.pending.PendingScreen
 import dev.sift.app.ui.review.ReviewScreen
 import dev.sift.app.ui.settings.SettingsScreen
 import dev.sift.app.ui.theme.SiftTheme
@@ -61,16 +62,37 @@ class MainActivity : ComponentActivity() {
         volumeKeyListeners -= listener
     }
 
+    private fun isVolumeKey(keyCode: Int) =
+        keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        val keep = when (keyCode) {
-            KeyEvent.KEYCODE_VOLUME_UP -> true
-            KeyEvent.KEYCODE_VOLUME_DOWN -> false
-            else -> return super.onKeyDown(keyCode, event)
-        }
+        if (!isVolumeKey(keyCode)) return super.onKeyDown(keyCode, event)
+
+        // Auto-repeat would fire a verdict every ~50ms while the key is held,
+        // tossing a run of photos from one accidental long press. Only the
+        // initial press counts — but the repeats are still swallowed below so
+        // holding a key does not leak through to the volume stream.
+        if (event != null && event.repeatCount > 0) return true
+
+        val keep = keyCode == KeyEvent.KEYCODE_VOLUME_UP
         for (listener in volumeKeyListeners) {
             if (listener(keep)) return true
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    /**
+     * Consuming only `onKeyDown` is not enough to suppress the volume UI.
+     *
+     * The framework adjusts the stream on key-down but shows the volume panel on
+     * key-**up**, so a deck bound to the volume keys would flash a slider over
+     * the photo on every single decision. Swallow the up event whenever a
+     * listener is active, and only then — with no deck on screen the keys must
+     * still work as volume keys.
+     */
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (isVolumeKey(keyCode) && volumeKeyListeners.isNotEmpty()) return true
+        return super.onKeyUp(keyCode, event)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -178,6 +200,13 @@ private fun SiftApp() {
                 onOpenReview = { navController.navigate(SiftNav.REVIEW) },
                 onOpenGrid = { navController.navigate(SiftNav.GRID) },
                 onOpenSettings = { navController.navigate(SiftNav.SETTINGS) },
+                onOpenPending = { navController.navigate(SiftNav.PENDING) },
+            )
+        }
+        composable(SiftNav.PENDING) {
+            PendingScreen(
+                onBack = { navController.popBackStack() },
+                onCommit = { navController.popBackStack() },
             )
         }
         composable(SiftNav.REVIEW) { ReviewScreen(onBack = { navController.popBackStack() }) }

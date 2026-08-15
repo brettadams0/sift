@@ -23,8 +23,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -76,6 +79,7 @@ fun TriageScreen(
     onOpenReview: () -> Unit,
     onOpenGrid: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenPending: () -> Unit,
     viewModel: TriageViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -123,7 +127,22 @@ fun TriageScreen(
                             Icon(Icons.Default.Undo, contentDescription = "Undo last decision")
                         }
                     }
-                    IconButton(onClick = onOpenGrid) { Text("Grid") }
+                    // Review used to be reachable only from the empty state,
+                    // which meant graded photos could pile up unreviewed with no
+                    // visible way in — and §9 only works if you actually look at
+                    // them before the originals go.
+                    if (state.pendingReview > 0) {
+                        BadgedBox(
+                            badge = { Badge { Text("${state.pendingReview}") } },
+                        ) {
+                            IconButton(onClick = onOpenReview) {
+                                Icon(
+                                    Icons.Default.RateReview,
+                                    contentDescription = "${state.pendingReview} photos to review",
+                                )
+                            }
+                        }
+                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
@@ -140,7 +159,7 @@ fun TriageScreen(
                     libraryTotal = state.total,
                     reviewed = state.reviewed,
                     pendingToss = state.pendingToss,
-                    onCommit = viewModel::commit,
+                    onCommit = onOpenPending,
                     onReview = onOpenReview,
                     onRescan = viewModel::rescanLibrary,
                 )
@@ -185,8 +204,13 @@ fun TriageScreen(
                     IconButton(onClick = { viewModel.decide(Verdict.TOSS) }) {
                         Icon(Icons.Default.Close, contentDescription = "Toss")
                     }
-                    OutlinedButton(onClick = viewModel::commit) {
-                        Text("Commit ${state.pendingToss}")
+                    // Goes to the bin rather than straight to the trash dialog:
+                    // the last chance to pull one photo back out is worth more
+                    // than one saved tap.
+                    OutlinedButton(
+                        onClick = { if (state.pendingToss > 0) onOpenPending() else viewModel.commit() },
+                    ) {
+                        Text(if (state.pendingToss > 0) "Bin ${state.pendingToss}" else "Commit")
                     }
                     IconButton(onClick = { viewModel.decide(Verdict.KEEP) }) {
                         Icon(Icons.Default.Check, contentDescription = "Keep")

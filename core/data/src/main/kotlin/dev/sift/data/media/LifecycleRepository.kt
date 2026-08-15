@@ -126,11 +126,38 @@ class LifecycleRepository @Inject constructor(
         val recent = db.triageDecisions().mostRecent(UNDO_DEPTH)
         val last = recent.firstOrNull { !it.committed } ?: return null
         db.triageDecisions().delete(last.assetId)
-        db.mediaAssets().markSeen(last.assetId, 0L)
+        db.mediaAssets().clearSeen(last.assetId)
         return last.assetId
     }
 
     fun pendingTossCount(): Flow<Int> = db.triageDecisions().pendingCount(Verdict.TOSS)
+
+    /** Live count of anything still reversible, for the undo control. */
+    fun undoableCount(): Flow<Int> = db.triageDecisions().uncommittedCount()
+
+    /** The photos queued for deletion, so a specific one can be rescued. */
+    fun pendingDeletions(): Flow<List<dev.sift.data.db.MediaAsset>> =
+        db.triageDecisions().pendingWithVerdict(Verdict.TOSS)
+
+    /**
+     * Take one specific photo back out of the deletion group.
+     *
+     * Undo-the-last-thing is the wrong shape for the mistake people actually
+     * make: you notice the wrong swipe several photos later, and by then the
+     * only recovery is to undo everything after it too. This removes the
+     * decision for one asset and puts it back at the front of the deck,
+     * leaving every other decision untouched.
+     *
+     * Only uncommitted decisions can be reversed — once the trash request has
+     * gone through, recovery is the system trash, not this.
+     */
+    suspend fun undoDecision(assetId: Long): Boolean {
+        val decision = db.triageDecisions().byAsset(assetId) ?: return false
+        if (decision.committed) return false
+        db.triageDecisions().delete(assetId)
+        db.mediaAssets().clearSeen(assetId)
+        return true
+    }
 
     /**
      * Build **deletion batch 1**: the triage rejects.
@@ -166,13 +193,26 @@ class LifecycleRepository @Inject constructor(
             transition(id, LifecycleState.TRASHED_AT_TRIAGE, "deletion batch 1")
         }
         db.triageDecisions().markCommitted(request.assetIds)
+    }
 
-        // Keepers move on to grading in the same commit.
+    /**
+     * Promote everything kept at triage into the grading queue.
+     *
+     * Deliberately independent of the trash result. This used to run only inside
+     * [onTriageTrashResult], which meant a session where nothing was tossed
+     * produced no trash request, no dialog, no result callback — and therefore
+     * no grading at all. Committing a hundred keepers and zero rejects silently
+     * did nothing.
+     *
+     * @return how many assets were queued.
+     */
+    suspend fun commitKeepers(): Int {
         val keeps = db.triageDecisions().uncommittedWith(Verdict.KEEP)
         for (decision in keeps) {
             transition(decision.assetId, LifecycleState.QUEUED_FOR_GRADE, "kept at triage")
         }
         db.triageDecisions().markCommitted(keeps.map { it.assetId })
+        return keeps.size
     }
 
     // ---- Review and approval (§9) -----------------------------------------

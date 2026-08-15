@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.sift.data.db.EditJobDao
 import dev.sift.data.db.MediaAssetDao
 import dev.sift.data.db.TriageDecisionDao
 import dev.sift.data.db.MediaAsset
@@ -40,6 +41,7 @@ class TriageViewModel @Inject constructor(
     application: Application,
     private val mediaAssets: MediaAssetDao,
     private val triageDecisions: TriageDecisionDao,
+    private val editJobs: EditJobDao,
     private val lifecycle: LifecycleRepository,
     private val settings: SettingsRepository,
 ) : AndroidViewModel(application) {
@@ -72,14 +74,20 @@ class TriageViewModel @Inject constructor(
         mediaAssets.seenCount(),
         mediaAssets.totalCount(),
         lifecycle.pendingTossCount(),
-        internal,
-    ) { deck, seen, total, pendingToss, base ->
+        combine(lifecycle.undoableCount(), editJobs.pendingReview(), internal) { undoable, review, base ->
+            Triple(undoable, review.size, base)
+        },
+    ) { deck, seen, total, pendingToss, (undoable, pendingReview, base) ->
         base.copy(
             deck = deck,
             reviewed = seen,
             total = total,
             pendingToss = pendingToss,
-            canUndo = undoStack.isNotEmpty(),
+            pendingReview = pendingReview,
+            // Derived from the database, not from an in-memory stack: the stack
+            // empties on rotation or process death while the decisions it would
+            // reverse are still sitting there.
+            canUndo = undoable > 0,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
@@ -130,11 +138,33 @@ class TriageViewModel @Inject constructor(
     fun commit() {
         viewModelScope.launch {
             val request = lifecycle.buildTriageTrashRequest()
+            if (request != null) {
+                // Keepers are promoted once the trash dialog resolves, so a
+                // cancelled dialog leaves the whole commit untouched.
+                internal.value = internal.value.copy(trashRequest = request, message = null)
+                return@launch
+            }
+
+            // Nothing to delete, but there may still be keepers waiting. This
+            // path exists because a session with no rejects used to commit
+            // nothing at all.
+            val queued = startGrading()
             internal.value = internal.value.copy(
-                trashRequest = request,
-                message = if (request == null) "Nothing to commit" else null,
+                message = when {
+                    queued > 0 -> "Grading $queued photos."
+                    else -> "Nothing to commit"
+                },
             )
         }
+    }
+
+    /** Promote keepers and kick the grader if settings allow. */
+    private suspend fun startGrading(): Int {
+        val queued = lifecycle.commitKeepers()
+        if (queued > 0 && settings.settings.first().autoGradeOnCommit) {
+            GradeWorker.enqueue(getApplication())
+        }
+        return queued
     }
 
     /**
@@ -148,10 +178,10 @@ class TriageViewModel @Inject constructor(
             undoStack.clear()
 
             val message = if (granted) {
-                if (settings.settings.first().autoGradeOnCommit) {
-                    // §9.2 — grading starts on commit, battery permitting.
-                    GradeWorker.enqueue(getApplication())
-                    "Trashed ${request.assetIds.size}. Grading your keepers now."
+                // §9.2 — grading starts on commit, battery permitting.
+                val queued = startGrading()
+                if (queued > 0) {
+                    "Trashed ${request.assetIds.size}. Grading $queued keepers now."
                 } else {
                     "Trashed ${request.assetIds.size}."
                 }
