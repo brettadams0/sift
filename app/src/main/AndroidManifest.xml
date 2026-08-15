@@ -19,6 +19,11 @@
       inserts into Pictures/Sift (§6.11).
     -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- READ_MEDIA_IMAGES is API 33+. Android 11 and 12 are inside minSdk 30
+         and need the older permission, capped so it is not requested above 32. -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />

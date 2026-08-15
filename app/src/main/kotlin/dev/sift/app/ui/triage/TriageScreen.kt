@@ -137,9 +137,12 @@ fun TriageScreen(
         ) {
             if (state.isEmpty) {
                 EmptyState(
+                    libraryTotal = state.total,
+                    reviewed = state.reviewed,
                     pendingToss = state.pendingToss,
                     onCommit = viewModel::commit,
                     onReview = onOpenReview,
+                    onRescan = viewModel::rescanLibrary,
                 )
             } else {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -333,26 +336,55 @@ private fun ClusterFilmstrip(
     }
 }
 
-/** §8 — the empty state offers the next thing to do rather than a blank screen. */
+/**
+ * §8 — the empty state offers the next thing to do rather than a blank screen.
+ *
+ * It also has to tell the truth about *why* it is empty. "Deck clear" in front of
+ * someone who has just installed the app and whose library never scanned is
+ * actively misleading: it reads as "nothing to do" when the real state is
+ * "nothing was found", and it leaves no next action. The three cases are
+ * genuinely different and each gets its own wording and its own button.
+ */
 @Composable
-private fun EmptyState(pendingToss: Int, onCommit: () -> Unit, onReview: () -> Unit) {
+private fun EmptyState(
+    libraryTotal: Int,
+    reviewed: Int,
+    pendingToss: Int,
+    onCommit: () -> Unit,
+    onReview: () -> Unit,
+    onRescan: () -> Unit,
+) {
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Deck clear", style = MaterialTheme.typography.headlineSmall)
-        Text(
+        if (libraryTotal == 0) {
+            // Nothing in the database at all: the scan has not finished, or it
+            // failed, or the permission was granted to a subset that excludes
+            // everything.
+            Text("No photos yet", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "Sift has not found anything in your library. The first scan runs in " +
+                    "the background and can take a minute or two on a large roll.\n\n" +
+                    "If it stays empty, check that Sift has access to all your photos " +
+                    "rather than a selected few, then rescan.",
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(onClick = onRescan) { Text("Rescan library") }
+        } else {
+            Text("Deck clear", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "You have been through all $libraryTotal photos" +
+                    if (reviewed > 0) " ($reviewed reviewed)." else ".",
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             if (pendingToss > 0) {
-                "$pendingToss photos are waiting to go to the bin."
-            } else {
-                "Nothing left to triage right now."
-            },
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (pendingToss > 0) {
-            Button(onClick = onCommit) { Text("Commit $pendingToss deletions") }
+                Button(onClick = onCommit) { Text("Commit $pendingToss deletions") }
+            }
+            OutlinedButton(onClick = onRescan) { Text("Rescan library") }
         }
         OutlinedButton(onClick = onReview) { Text("Review graded photos") }
     }

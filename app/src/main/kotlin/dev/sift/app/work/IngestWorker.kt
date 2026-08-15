@@ -125,10 +125,16 @@ class IngestWorker @AssistedInject constructor(
         private const val ANALYSIS_CHUNK = 25
         private const val CLUSTER_CHUNK = 500
 
-        fun enqueue(context: Context) {
+        /**
+         * @param force replaces work already in flight. Used by the manual
+         *   "Rescan library" action: with [ExistingWorkPolicy.KEEP] a scan that
+         *   is wedged or waiting can never be restarted by the user, which
+         *   leaves an empty deck with no way out.
+         */
+        fun enqueue(context: Context, force: Boolean = false) {
             WorkManager.getInstance(context).enqueueUniqueWork(
                 WORK_NAME,
-                ExistingWorkPolicy.KEEP,
+                if (force) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
                 OneTimeWorkRequestBuilder<IngestWorker>().addTag(WORK_NAME).build(),
             )
         }

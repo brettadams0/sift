@@ -11,6 +11,7 @@ import dev.sift.data.media.LifecycleRepository
 import dev.sift.data.media.TrashCoordinator
 import dev.sift.data.settings.SettingsRepository
 import dev.sift.app.work.GradeWorker
+import dev.sift.app.work.IngestWorker
 import dev.sift.model.ContentClass
 import dev.sift.model.LifecycleState
 import dev.sift.model.Verdict
@@ -159,6 +160,18 @@ class TriageViewModel @Inject constructor(
             }
             internal.value = internal.value.copy(trashRequest = null, message = message)
         }
+    }
+
+    /**
+     * Kick the library scan again.
+     *
+     * The deck is fed from the database, not from MediaStore directly, so if
+     * ingest never ran or died the deck is empty and stays empty. Without a way
+     * to retry, the only recovery is reinstalling.
+     */
+    fun rescanLibrary() {
+        IngestWorker.enqueue(getApplication(), force = true)
+        internal.value = internal.value.copy(message = "Rescanning your library\u2026")
     }
 
     fun consumeMessage() {

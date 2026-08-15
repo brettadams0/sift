@@ -2,6 +2,7 @@ package dev.sift.app
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -83,14 +84,18 @@ class MainActivity : ComponentActivity() {
                 val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestMultiplePermissions(),
                 ) { results ->
-                    granted = results[Manifest.permission.READ_MEDIA_IMAGES] == true
+                    // Re-check rather than reading the result map: the map is
+                    // keyed by the permission actually requested, which differs
+                    // by OS version, and POST_NOTIFICATIONS being declined must
+                    // not block the app.
+                    granted = results[readImagesPermission()] == true || hasMediaPermissions()
                     if (granted) IngestWorker.enqueue(this)
                 }
 
                 if (granted) {
                     SiftApp()
                 } else {
-                    PermissionGate { launcher.launch(REQUIRED_PERMISSIONS) }
+                    PermissionGate { launcher.launch(requiredPermissions()) }
                 }
             }
         }
@@ -98,19 +103,44 @@ class MainActivity : ComponentActivity() {
         if (hasMediaPermissions()) IngestWorker.enqueue(this)
     }
 
+    /**
+     * The read permission for images, which is not the same string on every
+     * supported version.
+     *
+     * `READ_MEDIA_IMAGES` arrived in API 33. `minSdk` here is 30, so on Android
+     * 11 and 12 that constant names a permission the platform has never heard
+     * of: `checkSelfPermission` returns DENIED forever and the request is a
+     * no-op, leaving the app permanently stuck on its own permission screen with
+     * no way forward. Below 33 the correct permission is `READ_EXTERNAL_STORAGE`.
+     */
+    private fun readImagesPermission(): String =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            @Suppress("DEPRECATION")
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+
     private fun hasMediaPermissions(): Boolean =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) ==
+        ContextCompat.checkSelfPermission(this, readImagesPermission()) ==
             PackageManager.PERMISSION_GRANTED
 
-    private companion object {
-        val REQUIRED_PERMISSIONS = arrayOf(
-            Manifest.permission.READ_MEDIA_IMAGES,
-            // Without this MediaStore silently strips GPS from every frame
-            // (trap #12) — the loss is invisible until you go looking months later.
-            Manifest.permission.ACCESS_MEDIA_LOCATION,
-            Manifest.permission.POST_NOTIFICATIONS,
-        )
-    }
+    /**
+     * Everything worth asking for, filtered to what this OS version has.
+     *
+     * `POST_NOTIFICATIONS` is also API 33+; requesting it on older versions is
+     * harmless but pointless. Neither it nor `ACCESS_MEDIA_LOCATION` gates the
+     * app — declining notifications costs you the grading progress bar, and
+     * declining media location costs GPS in exports (trap #12), but neither
+     * should stop you triaging.
+     */
+    private fun requiredPermissions(): Array<String> = buildList {
+        add(readImagesPermission())
+        add(Manifest.permission.ACCESS_MEDIA_LOCATION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }.toTypedArray()
 }
 
 @Composable

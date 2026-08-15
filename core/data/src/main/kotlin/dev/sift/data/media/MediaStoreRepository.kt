@@ -5,6 +5,7 @@ import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.database.ContentObserver
+import android.os.Bundle
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.net.Uri
@@ -55,12 +56,38 @@ class MediaStoreRepository @Inject constructor(
         MediaStore.Images.Media.MIME_TYPE,
     )
 
+    /**
+     * One page of the library.
+     *
+     * Paging goes through the **query-argument Bundle**, not through a
+     * `"... LIMIT n OFFSET m"` suffix on the sort order. Appending SQL to the
+     * sort string is the pre-Android-11 idiom and it is worse than deprecated
+     * here: since API 30 MediaProvider parses that argument and rejects
+     * anything containing SQL keywords, so the query returns **no rows at all**
+     * rather than failing loudly. The result is an app that looks like it has an
+     * empty camera roll.
+     *
+     * `QUERY_ARG_LIMIT` and `QUERY_ARG_OFFSET` are API 30, which is `minSdk`,
+     * so there is no compatibility branch to keep.
+     */
     fun page(limit: Int = PAGE_SIZE, offset: Int = 0): List<MediaAsset> {
         val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-        val order = "${MediaStore.Images.Media.DATE_TAKEN} DESC, ${MediaStore.Images.Media._ID} DESC"
+
+        val queryArgs = Bundle().apply {
+            putStringArray(
+                ContentResolver.QUERY_ARG_SORT_COLUMNS,
+                arrayOf(MediaStore.Images.Media.DATE_TAKEN, MediaStore.Images.Media._ID),
+            )
+            putInt(
+                ContentResolver.QUERY_ARG_SORT_DIRECTION,
+                ContentResolver.QUERY_SORT_DIRECTION_DESCENDING,
+            )
+            putInt(ContentResolver.QUERY_ARG_LIMIT, limit)
+            putInt(ContentResolver.QUERY_ARG_OFFSET, offset)
+        }
 
         val assets = mutableListOf<MediaAsset>()
-        resolver.query(collection, projection, null, null, "$order LIMIT $limit OFFSET $offset")
+        resolver.query(collection, projection, queryArgs, null)
             ?.use { cursor ->
                 val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
                 val takenColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)

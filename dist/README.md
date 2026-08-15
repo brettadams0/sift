@@ -1,9 +1,9 @@
 # Prebuilt APK
 
-`sift-0.1.0-release.apk` — signed, minSdk 30, 2.9 MB.
+`sift-0.1.1-release.apk` — signed, minSdk 30, 2.9 MB.
 
 Direct download (works in a phone browser):
-https://github.com/brettadams0/sift/raw/main/dist/sift-0.1.0-release.apk
+https://github.com/brettadams0/sift/raw/main/dist/sift-0.1.1-release.apk
 
 Install steps: [../docs/INSTALL.md](../docs/INSTALL.md)
 
