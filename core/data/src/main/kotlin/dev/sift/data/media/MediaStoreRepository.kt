@@ -155,8 +155,9 @@ class MediaStoreRepository @Inject constructor(
             ExifInterface.ORIENTATION_NORMAL,
         ) ?: ExifInterface.ORIENTATION_NORMAL
 
+        // Already tagged GAMMA_SRGB by fromArgb, and bake() carries the tag
+        // through, so the frame arrives at §6.1 step 3 correctly labelled.
         image = Orientation.bake(image, orientation)
-        image.space = ColorSpaceTag.GAMMA_SRGB
 
         val hasExposure = exif != null && (
             exif.getAttribute(ExifInterface.TAG_F_NUMBER) != null ||

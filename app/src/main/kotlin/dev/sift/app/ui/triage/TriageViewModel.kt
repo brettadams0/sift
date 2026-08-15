@@ -4,8 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.sift.data.db.MediaAssetDao
+import dev.sift.data.db.TriageDecisionDao
 import dev.sift.data.db.MediaAsset
-import dev.sift.data.db.SiftDatabase
 import dev.sift.data.media.LifecycleRepository
 import dev.sift.data.media.TrashCoordinator
 import dev.sift.data.settings.SettingsRepository
@@ -36,7 +37,8 @@ import javax.inject.Inject
 @HiltViewModel
 class TriageViewModel @Inject constructor(
     application: Application,
-    private val db: SiftDatabase,
+    private val mediaAssets: MediaAssetDao,
+    private val triageDecisions: TriageDecisionDao,
     private val lifecycle: LifecycleRepository,
     private val settings: SettingsRepository,
 ) : AndroidViewModel(application) {
@@ -65,9 +67,9 @@ class TriageViewModel @Inject constructor(
     private val internal = MutableStateFlow(UiState())
 
     val state: StateFlow<UiState> = combine(
-        db.mediaAssets().deck(),
-        db.mediaAssets().seenCount(),
-        db.mediaAssets().totalCount(),
+        mediaAssets.deck(),
+        mediaAssets.seenCount(),
+        mediaAssets.totalCount(),
         lifecycle.pendingTossCount(),
         internal,
     ) { deck, seen, total, pendingToss, base ->
@@ -113,7 +115,7 @@ class TriageViewModel @Inject constructor(
      */
     fun tossAllNonPhotographic() {
         viewModelScope.launch {
-            val candidates = db.mediaAssets()
+            val candidates = mediaAssets
                 .inStateNow(LifecycleState.UNTRIAGED)
                 .filter { it.contentClass == ContentClass.NON_PHOTOGRAPHIC }
             for (asset in candidates) lifecycle.recordDecision(asset.id, Verdict.TOSS)
@@ -169,7 +171,7 @@ class TriageViewModel @Inject constructor(
             internal.value = internal.value.copy(cluster = emptyList(), suggestedKeeperId = null)
             return
         }
-        val members = db.mediaAssets().inCluster(clusterId)
+        val members = mediaAssets.inCluster(clusterId)
         internal.value = internal.value.copy(
             cluster = members,
             // §7 — pre-select the sharpest, ranked on P90 not mean (trap #11).

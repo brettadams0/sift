@@ -11,8 +11,9 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import dev.sift.data.db.MediaAssetDao
+import dev.sift.data.db.EditJobDao
 import dev.sift.data.db.EditJob
-import dev.sift.data.db.SiftDatabase
 import dev.sift.data.di.ImagingDispatcher
 import dev.sift.data.media.LifecycleRepository
 import dev.sift.data.media.MediaStoreRepository
@@ -25,6 +26,7 @@ import dev.sift.model.LifecycleState
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.util.UUID
 
@@ -44,7 +46,8 @@ import java.util.UUID
 class GradeWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
-    private val db: SiftDatabase,
+    private val mediaAssets: MediaAssetDao,
+    private val editJobs: EditJobDao,
     private val media: MediaStoreRepository,
     private val lifecycle: LifecycleRepository,
     private val settings: SettingsRepository,
@@ -64,7 +67,7 @@ class GradeWorker @AssistedInject constructor(
         }
 
         val current = settings.settings.first()
-        val queued = db.mediaAssets().inStateNow(LifecycleState.QUEUED_FOR_GRADE)
+        val queued = mediaAssets.inStateNow(LifecycleState.QUEUED_FOR_GRADE)
         if (queued.isEmpty()) return Result.success()
 
         setForeground(GradeNotifications.foregroundInfo(applicationContext, 0, queued.size))
@@ -85,7 +88,7 @@ class GradeWorker @AssistedInject constructor(
             }
 
             outcome.onSuccess { job ->
-                db.editJobs().upsert(job)
+                editJobs.upsert(job)
                 lifecycle.transition(
                     asset.id,
                     LifecycleState.PENDING_REVIEW,
@@ -93,7 +96,7 @@ class GradeWorker @AssistedInject constructor(
                 )
             }.onFailure { error ->
                 // One bad frame never fails the batch (§12).
-                db.editJobs().upsert(failedJob(asset.id, error))
+                editJobs.upsert(failedJob(asset.id, error))
                 lifecycle.transition(asset.id, LifecycleState.UNREADABLE, "decode/grade failed: $error")
             }
 
@@ -135,11 +138,11 @@ class GradeWorker @AssistedInject constructor(
             sourceUri = uri,
         )
 
-        db.mediaAssets().setAnalysis(
+        mediaAssets.setAnalysis(
             id = assetId,
             json = json.encodeToString(result.analysisBefore),
             contentClass = result.contentClass,
-            dHash = db.mediaAssets().byId(assetId)?.dHash ?: 0L,
+            dHash = mediaAssets.byId(assetId)?.dHash ?: 0L,
         )
 
         return EditJob(

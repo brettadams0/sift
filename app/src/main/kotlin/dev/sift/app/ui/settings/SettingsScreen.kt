@@ -32,8 +32,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.sift.data.db.EditJobDao
 import dev.sift.app.work.GradeLog
-import dev.sift.data.db.SiftDatabase
 import dev.sift.data.settings.SettingsRepository
 import dev.sift.model.ExportPreset
 import dev.sift.model.GradeSettings
@@ -47,7 +47,7 @@ import javax.inject.Inject
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val repository: SettingsRepository,
-    db: SiftDatabase,
+    editJobs: EditJobDao,
 ) : ViewModel() {
 
     data class UiState(
@@ -58,8 +58,8 @@ class SettingsViewModel @Inject constructor(
 
     val state: StateFlow<UiState> = combine(
         repository.settings,
-        db.editJobs().rejectionHistogram(),
-        db.editJobs().rejectionTotal(),
+        editJobs.rejectionHistogram(),
+        editJobs.rejectionTotal(),
     ) { settings, histogram, total ->
         UiState(settings, histogram.map { it.reason to it.count }, total)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())

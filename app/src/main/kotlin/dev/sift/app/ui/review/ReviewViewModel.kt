@@ -5,9 +5,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.sift.app.work.GradeWorker
+import dev.sift.data.db.MediaAssetDao
+import dev.sift.data.db.EditJobDao
 import dev.sift.data.db.EditJob
 import dev.sift.data.db.MediaAsset
-import dev.sift.data.db.SiftDatabase
 import dev.sift.data.media.ApprovalGuard
 import dev.sift.data.media.LifecycleRepository
 import dev.sift.data.media.TrashCoordinator
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import javax.inject.Inject
 
@@ -36,7 +38,8 @@ import javax.inject.Inject
 @HiltViewModel
 class ReviewViewModel @Inject constructor(
     application: Application,
-    private val db: SiftDatabase,
+    private val mediaAssets: MediaAssetDao,
+    private val editJobs: EditJobDao,
     private val lifecycle: LifecycleRepository,
     private val trash: TrashCoordinator,
     private val json: Json,
@@ -109,12 +112,12 @@ class ReviewViewModel @Inject constructor(
 
     val state: StateFlow<UiState> = combine(
         lifecycle.pendingReview(),
-        db.editJobs().rejectionHistogram(),
-        db.editJobs().rejectionTotal(),
+        editJobs.rejectionHistogram(),
+        editJobs.rejectionTotal(),
         internal,
     ) { jobs, histogram, total, base ->
         val items = jobs.mapNotNull { job ->
-            db.mediaAssets().byId(job.sourceAssetId)?.let { asset ->
+            mediaAssets.byId(job.sourceAssetId)?.let { asset ->
                 Item(
                     job = job,
                     asset = asset,
@@ -188,7 +191,7 @@ class ReviewViewModel @Inject constructor(
                     }
                     lifecycle.reject(item.job, null)
                     lifecycle.requeueForGrade(item.asset.id, "regrade as ${other.name.lowercase()}")
-                    db.editJobs().upsert(item.job.copy(profile = other, profileWasManual = true))
+                    editJobs.upsert(item.job.copy(profile = other, profileWasManual = true))
                     GradeWorker.enqueue(getApplication(), force = true)
                 }
                 RegradeAction.REDUCED_STRENGTH -> {

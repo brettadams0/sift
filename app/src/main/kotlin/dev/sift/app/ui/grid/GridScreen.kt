@@ -25,8 +25,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.sift.data.db.MediaAssetDao
 import dev.sift.data.db.MediaAsset
-import dev.sift.data.db.SiftDatabase
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,7 +43,7 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class GridViewModel @Inject constructor(
-    private val db: SiftDatabase,
+    private val mediaAssets: MediaAssetDao,
 ) : ViewModel() {
 
     private val internal = MutableStateFlow<List<MediaAsset>>(emptyList())
@@ -59,7 +59,7 @@ class GridViewModel @Inject constructor(
     fun loadMore() {
         if (exhausted) return
         viewModelScope.launch {
-            val page = db.mediaAssets().page(PAGE, offset)
+            val page = mediaAssets.page(PAGE, offset)
             if (page.isEmpty()) {
                 exhausted = true
                 return@launch

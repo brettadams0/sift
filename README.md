@@ -9,34 +9,42 @@ grading pipeline and exports to a watched folder.
 
 Built to [`SIFT_SPEC.md`](docs/SIFT_SPEC.md) v3.
 
+**→ [Install and first-run guide](docs/INSTALL.md)**
+
 ---
 
 ## Status
 
+Every module compiles. `./gradlew build` is green, and `./gradlew assembleRelease`
+produces a **2.9 MB signed APK** that `apksigner` verifies as installable across
+API 30–35.
+
 | Milestone | Deliverable | State |
 |---|---|---|
-| **M0** | Permissions, MediaStore, thumbnail grid | Written, not yet run on device |
-| **M1** | Swipe deck, Room, undo, batched trash | Written, not yet run on device |
-| **M2** | dHash, clustering, screenshot detection | **Logic tested** (JVM), UI unverified |
+| **M0** | Permissions, MediaStore, thumbnail grid | Builds; **not yet run on a device** |
+| **M1** | Swipe deck, Room, undo, batched trash | Builds; **not yet run on a device** |
+| **M2** | dHash, clustering, screenshot detection | Logic tested; UI not yet run |
 | **M3** | Float pipeline + `FrameAnalysis` + Portrait grade | **Done and tested** |
 | **M4** | Scene grade + router | **Done and tested** |
 | **M5** | Quality gates + fallback | **Done and tested** |
-| **M6** | Export presets, encode, EXIF, settings | Encode+presets tested; EXIF path unverified |
-| **M7** | Review UI, lifecycle, deferred original-trashing | Written, not yet run on device |
+| **M6** | Export presets, encode, EXIF, settings | Encode + presets tested; EXIF path not yet run |
+| **M7** | Review UI, lifecycle, deferred original-trashing | Builds; **not yet run on a device** |
 | **M8** | Upscale | **Deliberately not built** — see below |
 
-`:core:model`, `:core:imaging` and `:core:testing` build and test on any JDK 17+
-with no Android SDK. **Of 47 tests, 46 pass and 1 is deliberately skipped**
-(§14.1, which needs your own fixtures — see below).
+**Of 47 tests, 46 pass and 1 is deliberately skipped** (§14.1, which needs your
+own fixtures — see below).
 
-The Android modules (`:app`, `:core:data`, `:core:ml`) have never been compiled:
-this project was assembled in an environment with no Android SDK. They are
-written to the spec but should be treated as a first draft until they build.
+> **The honest caveat: no part of this has run on a phone yet.** It compiles,
+> R8 does not strip anything it needs, the tests that can run do run, and the
+> APK installs — but the UI, the MediaStore reads, the trash dialogs and the
+> EXIF copy have never executed against real Android. Treat the first session as
+> a shakedown, and see [what is not proven](#what-is-not-proven) before trusting
+> it with the approve-and-trash step.
 
 ```sh
-cd sift
-gradle :core:imaging:test          # the pipeline — runs anywhere
-gradle build                       # everything, needs ANDROID_HOME
+./gradlew :core:imaging:test   # the pipeline — needs only a JDK, no Android SDK
+./gradlew build                # everything, needs local.properties → sdk.dir
+./gradlew assembleRelease      # the sideloadable APK
 ```
 
 ---
@@ -157,10 +165,34 @@ new clipping. See `SceneGrade.COMPOSED_BLACK_FLOOR_L`.
   Kotlin pipeline has no SIMD, and the analysis pass takes a full-resolution
   Laplacian and a cube root per pixel. §13 says a miss means stop and fix — that
   measurement has not happened, and the 12MP figures are the ones to check first.
-- **Everything Android is uncompiled.** See the status table.
+- **Nothing has run on a device.** This is the big one. Compiling proves the
+  types line up; it proves nothing about whether the swipe deck feels right,
+  whether `createTrashRequest` returns what the code expects, whether the EXIF
+  copy actually preserves GPS, or whether a 12MP grade finishes before the
+  system kills the service. There are no instrumented tests yet — §14's
+  device-dependent cases (§14.7 memory, §14.8 cancelled dialog, §14.10
+  original-retention) are specified and unwritten.
 - **§14.4 router accuracy, §14.5 clustering precision/recall** need hand-labelled
   real photographs; the synthetic fixtures show the mechanisms work, not that the
   thresholds are right for your library.
+
+### What *is* mechanically enforced
+
+Three properties that would otherwise erode silently are checked by the build,
+and each has been verified to actually fail when violated rather than passing
+vacuously:
+
+- **No network permission (§3).** `verifyNoNetworkPermissionsRelease` reads the
+  *merged* manifest — the one that ships — and fails on `INTERNET`,
+  `ACCESS_NETWORK_STATE` or `ACCESS_WIFI_STATE`. WorkManager pulls
+  `ACCESS_NETWORK_STATE` in through manifest merging; it is removed explicitly,
+  and the guard is what stops the next dependency putting it back.
+- **Room schemas stay committed (§4.2).** CI fails if an entity changed without
+  its schema being regenerated, so migrations never stop being reviewable.
+- **R8 does not strip the serializers.** `derivedParamsJson` and
+  `gateResultsJson` are not optional (§6.3, §5) — a minified build that lost
+  `FrameAnalysis$$serializer` would throw at runtime on the first graded photo.
+  The release APK is checked to still contain them.
 
 ---
 
@@ -215,6 +247,11 @@ And one added here:
    "targeting a consistent apparent sharpness", which requires a target to aim
    at. The current value is defensible, not measured. Same treatment as the
    detail blend: tune once against real photographs, then commit it.
+5. **Instrumented tests.** §14.7, §14.8 and §14.10 all need a device or an
+   emulator. §14.10 is the one that matters — its failure mode is permanent
+   photo loss — and until it exists, the §9.3 invariants are enforced by
+   `ApprovalGuard` and reviewed by eye, not proven. Treat the approve-and-trash
+   step with more suspicion than the rest of the app.
 
 ---
 

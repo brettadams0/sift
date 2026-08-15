@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The imaging pipeline is the part that decides output quality (§0), and it is
+  # deliberately free of Android so it can be tested without a device or an SDK
+  # (§4.1). Running it as its own job keeps that property honest: if someone
+  # introduces an Android dependency into :core:imaging, this job stops working.
+  pipeline:
+    name: Imaging pipeline (no Android SDK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Test the pure-JVM modules
+        run: ./gradlew :core:model:build :core:imaging:test :core:testing:build
+
+      - name: Publish test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: imaging-test-results
+          path: core/imaging/build/reports/tests/test
+          if-no-files-found: ignore
+
+  android:
+    name: Android build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Assembles both variants. The release variant matters even without a
+      # keystore (it falls back to the debug key): R8 is where Hilt, Room and
+      # kotlinx-serialization break, and a debug-only build would never catch it.
+      - name: Assemble
+        run: ./gradlew assembleDebug assembleRelease
+
+      # §3's central claim, checked against the manifest that actually ships.
+      # assemble already depends on this; running it explicitly makes a failure
+      # legible in the job log instead of buried in the assemble output.
+      - name: Verify no network permission (§3)
+        run: ./gradlew :app:verifyNoNetworkPermissionsRelease
+
+      # §4.2 requires Room schemas to be exported and committed. If an entity
+      # changes without the schema being regenerated, migrations silently stop
+      # being reviewable — so an uncommitted schema change fails the build.
+      - name: Verify Room schema is committed (§4.2)
+        run: |
+          if [ -n "$(git status --porcelain core/data/schemas)" ]; then
+            echo "::error::Room schema changed but was not committed. Run a build and commit core/data/schemas."
+            git --no-pager diff -- core/data/schemas
+            exit 1
+          fi
+          echo "Room schema is up to date."
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sift-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
