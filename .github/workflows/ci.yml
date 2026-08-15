@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Pushes made with a GitHub App credential do not trigger workflows, so the
+  # commit that introduced this file could not run it. Manual dispatch means the
+  # first run does not have to wait for an unrelated commit.
+  workflow_dispatch:
 
 permissions:
   contents: read
