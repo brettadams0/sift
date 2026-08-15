@@ -148,14 +148,38 @@ class MediaStoreRepository @Inject constructor(
      * crop, every face box and every aspect decision is computed against the
      * wrong axes.
      */
+    /**
+     * @param maxLongEdge decode no larger than this on the long edge, or null
+     *   for full resolution.
+     *
+     *   Ingest passes a small value. §7 asks for "dHash and lightweight
+     *   analysis" during the library scan, and the difference is not academic:
+     *   a full-resolution decode of a 12MP frame costs a ~48MB bitmap and a
+     *   ~144MB float buffer, and the scan was paying that for every photo in the
+     *   library purely to derive a 64-bit hash and a content class. Sampling
+     *   down first gives the same hash and the same routing decision for a
+     *   fraction of the work. Grading still decodes at full resolution, because
+     *   there the pixels are the point.
+     */
     @Throws(IOException::class)
-    fun decode(uri: Uri): DecodedFrame {
+    fun decode(uri: Uri, maxLongEdge: Int? = null): DecodedFrame {
         val source = ImageDecoder.createSource(resolver, uri)
         var isP3 = false
 
         val bitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             decoder.isMutableRequired = false
+
+            if (maxLongEdge != null) {
+                val longEdge = maxOf(info.size.width, info.size.height)
+                // Powers of two only: setTargetSampleSize rounds to one anyway,
+                // and asking for an exact size makes the decoder do a scaling
+                // pass instead of simply skipping samples.
+                var sample = 1
+                while (longEdge / (sample * 2) >= maxLongEdge) sample *= 2
+                if (sample > 1) decoder.setTargetSampleSize(sample)
+            }
+
             // §6.2 — read the source colour space; Samsung shoots sRGB or
             // Display P3 depending on settings.
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -314,6 +338,16 @@ class MediaStoreRepository @Inject constructor(
     companion object {
         const val PAGE_SIZE = 200
         const val EXPORT_RELATIVE_PATH = "Pictures/Sift"
+
+        /**
+         * Long edge used for the library scan (§7).
+         *
+         * Large enough that the skin mask, edge density and bimodality still
+         * classify content correctly, small enough that scanning a few thousand
+         * photos is minutes rather than hours. Grading re-analyses at full
+         * resolution, so nothing downstream inherits this approximation.
+         */
+        const val SCAN_LONG_EDGE = 1024
 
         /** §9.6 — holding original + graded + exports roughly triples footprint. */
         const val MIN_FREE_BYTES = 2L * 1024 * 1024 * 1024

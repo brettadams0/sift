@@ -273,6 +273,11 @@ private fun VerdictStrip(item: ReviewViewModel.Item) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
+            Text(
+                item.changeSummary(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
             for (line in item.verdictLines()) {
                 Text(
                     line,

@@ -61,7 +61,10 @@ class IngestWorker @AssistedInject constructor(
             for (asset in batch) {
                 runCatching {
                     withContext(imagingDispatcher) {
-                        val decoded = media.decode(Uri.parse(asset.uri))
+                        val decoded = media.decode(
+                            Uri.parse(asset.uri),
+                            maxLongEdge = MediaStoreRepository.SCAN_LONG_EDGE,
+                        )
                         val linear = ColorSpaces.toLinear(decoded.image)
                         val analysis = FrameAnalyzer.analyze(linear, decoded.metadata)
                         val hash = PerceptualHash.dHash(linear)

@@ -70,7 +70,7 @@ class GradeWorker @AssistedInject constructor(
         val queued = mediaAssets.inStateNow(LifecycleState.QUEUED_FOR_GRADE)
         if (queued.isEmpty()) return Result.success()
 
-        setForeground(GradeNotifications.foregroundInfo(applicationContext, 0, queued.size))
+        showProgress(0, queued.size)
 
         var completed = 0
         for (asset in queued) {
@@ -83,7 +83,23 @@ class GradeWorker @AssistedInject constructor(
 
             val outcome = runCatching {
                 withContext(imagingDispatcher) {
-                    gradeOne(asset.id, Uri.parse(asset.uri), current)
+                    try {
+                        gradeOne(asset.id, Uri.parse(asset.uri), current, decodeLongEdge = null)
+                    } catch (oom: OutOfMemoryError) {
+                        // §12: "OOM during processing — catch, release Mats,
+                        // retry once at half resolution, then fail the job."
+                        // A 12MP frame is ~144MB as unbounded float and the
+                        // pipeline holds several buffers at once, so this is a
+                        // routine outcome on a loaded device, not a corrupt file.
+                        GradeLog.record(asset.id, oom)
+                        System.gc()
+                        gradeOne(
+                            asset.id,
+                            Uri.parse(asset.uri),
+                            current,
+                            decodeLongEdge = HALF_RESOLUTION_LONG_EDGE,
+                        )
+                    }
                 }
             }
 
@@ -101,20 +117,33 @@ class GradeWorker @AssistedInject constructor(
             }
 
             completed++
-            setForeground(
-                GradeNotifications.foregroundInfo(applicationContext, completed, queued.size),
-            )
+            showProgress(completed, queued.size)
         }
 
         return Result.success()
+    }
+
+    /**
+     * Show batch progress, tolerating a refusal.
+     *
+     * `setForeground` throws on Android 12+ when the system declines to let a
+     * background app start a foreground service. That is a notification
+     * problem, not a grading problem — losing the progress bar must not abandon
+     * a batch of photos halfway through.
+     */
+    private suspend fun showProgress(completed: Int, total: Int) {
+        runCatching {
+            setForeground(GradeNotifications.foregroundInfo(applicationContext, completed, total))
+        }
     }
 
     private suspend fun gradeOne(
         assetId: Long,
         uri: Uri,
         gradeSettings: dev.sift.model.GradeSettings,
+        decodeLongEdge: Int?,
     ): EditJob {
-        val decoded = media.decode(uri)
+        val decoded = media.decode(uri, maxLongEdge = decodeLongEdge)
 
         // The master is always produced; §10's other presets derive from it and
         // are exported alongside when enabled.
@@ -189,6 +218,13 @@ class GradeWorker @AssistedInject constructor(
     companion object {
         const val WORK_NAME = "sift-grade"
         const val KEY_ERROR = "error"
+
+        /**
+         * Retry ceiling after an OOM (§12). Roughly a quarter of the pixels of a
+         * 12MP frame, which is the difference between a ~144MB float buffer and
+         * a ~36MB one.
+         */
+        const val HALF_RESOLUTION_LONG_EDGE = 2048
 
         /**
          * §9.2 — battery > 30% or charging starts immediately; otherwise the
