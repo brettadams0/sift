@@ -3,6 +3,47 @@
 All versions are sideload-only builds signed with the same key, so every one
 installs over the last as an update (see [dist/](dist/)).
 
+## 0.2.5
+
+**The grading fix.** Graded photos were coming out worse than the originals, and
+the cause was not the grade — it was that most of them were never graded at full
+resolution.
+
+A 12MP frame did not fit. Peak footprint was five full frames alive at once, and
+on the 512MB heap the emulator reports, the pipeline OOMed 48MB from the end.
+§12's retry then re-ran at 2048px and the app shipped *that* as the master. Every
+large photo was silently downgraded to a quarter of its resolution, and nothing
+said so.
+
+### Fixed
+
+- **Four of the five full-frame allocations are gone.**
+  - The decoded bitmap is freed before the float buffer is allocated, instead of
+    after (−48MB).
+  - `Pipeline.Request.ownsSource` lets a caller that will not reuse its frame
+    have it converted in place rather than copied (−144MB). `GradeWorker` opts
+    in; it decodes, grades and drops. Defaults to false, because it is a promise
+    about the caller.
+  - Quantisation writes in place — `resized` was dead after the sharpness
+    reading, so the defensive copy was pure waste (−144MB).
+  - The quality gates read the encoded bytes directly instead of rebuilding a
+    float frame from them (−144MB). Nothing is approximated: channel clipping is
+    exact and simpler at 8-bit, and chroma still measures the same strided proxy.
+- **A reduced-resolution grade is no longer shipped as a master.** It is treated
+  as a fallback: the original is kept untouched and the count is surfaced. Those
+  exports could never pass §9.3's invariant 4 anyway — it compares the export's
+  dimensions against the source's — so each one was refused and requeued, to OOM
+  and be refused again in a loop.
+
+### Tested
+
+- `GradeMemoryTest` now **requires** a full-resolution 12MP grade rather than
+  accepting either outcome, so a regression puts exports back to quarter
+  resolution and fails the build. §12's retry keeps its own test.
+
+Timing is unchanged within noise (5.0s warm median against 5.4s, on a loaded
+container). This bought resolution, not speed; §13's 2.5s budget is still missed.
+
 ## 0.2.4
 
 Two bugs from real use, both in the export path, both invisible to every test

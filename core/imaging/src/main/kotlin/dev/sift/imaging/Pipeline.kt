@@ -57,6 +57,23 @@ object Pipeline {
         val resolver: Upscale.SuperResolver = Upscale.LanczosBaseline,
         /** Makes dither reproducible; real exports pass the asset id. */
         val ditherSeed: Long = 0L,
+
+        /**
+         * True when the caller will not touch [source] again, letting the
+         * pipeline convert it in place instead of copying.
+         *
+         * At 12MP that copy is ~144MB, and it was pure waste for the only
+         * caller that matters: `GradeWorker` decodes a frame, grades it, and
+         * drops it. Holding both meant a full-resolution grade did not fit in a
+         * 512MB heap, so §12 downscaled every large photo to 2048px and shipped
+         * that as the master — a resolution loss nobody asked for and nothing
+         * reported.
+         *
+         * Defaults to false so a caller that reuses its frame (the tests, which
+         * grade the same fixture several ways) keeps the safe behaviour. Opting
+         * in is a promise about the caller, not about the pipeline.
+         */
+        val ownsSource: Boolean = false,
     )
 
     data class Result(
@@ -85,7 +102,9 @@ object Pipeline {
         val started = System.nanoTime()
 
         // ---- 3-4. Normalise to unbounded linear float ---------------------
-        val linear = ColorSpaces.toLinear(request.source.image.copy())
+        val linear = ColorSpaces.toLinear(
+            if (request.ownsSource) request.source.image else request.source.image.copy(),
+        )
         if (request.source.metadata.isDisplayP3) {
             // Perceptual soft-clip, never a hard clamp — see §6.2 and
             // ColorSpaces.displayP3ToSrgb.
@@ -318,20 +337,24 @@ object Pipeline {
         val sharpnessAfter = FrameAnalyzer.sharpnessP90(resized)
 
         // ---- 13. Quantise + dither, exactly once ---------------------------
-        val rgb = Quantize.toBytes(resized.copy(), request.ditherSeed)
+        // `resized` is dead after this line — the sharpness reading above was
+        // its last use — so quantising in place is safe and saves another
+        // full-frame allocation. It is never `linear`: `work` is a copy, and a
+        // retry re-copies from `linear`, which is untouched.
+        val rgb = Quantize.toBytes(resized, request.ditherSeed)
 
         // ---- 14. Encode ----------------------------------------------------
         val jpeg = JpegEncoder.encode(rgb, outputSize.width, outputSize.height, request.preset.jpegQuality)
 
         // ---- 15. Gates -----------------------------------------------------
-        val outputLinear = ColorSpaces.toLinear(
-            FloatImage.fromBytes(outputSize.width, outputSize.height, rgb),
-        )
-        // Gate-only measurement. The gates need three figures — clipped
-        // highlights, crushed shadows and mean chroma — and a full analysis pass
-        // additionally computes sharpness tiles, noise sigmas, edge density, the
-        // skin mask and document detection, none of which any gate reads.
-        val analysisAfter = FrameAnalyzer.analyzeForGates(outputLinear)
+        // Gate-only measurement, read straight from the encoded bytes. The gates
+        // need three figures — clipped highlights, crushed shadows and mean
+        // chroma — and a full analysis pass additionally computes sharpness
+        // tiles, noise sigmas, edge density, the skin mask and document
+        // detection, none of which any gate reads. Building a FloatImage from
+        // `rgb` to get them cost another full frame at the exact moment the
+        // source, the working copy and the byte buffer were all still live.
+        val analysisAfter = FrameAnalyzer.analyzeForGates(rgb, outputSize.width, outputSize.height)
         val banding = QualityGates.bandingScore(rgb, outputSize.width, outputSize.height)
 
         val gateResults = QualityGates.evaluate(

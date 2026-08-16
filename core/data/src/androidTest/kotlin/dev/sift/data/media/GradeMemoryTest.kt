@@ -38,24 +38,43 @@ class GradeMemoryTest {
 
     private val context: Context = ApplicationProvider.getApplicationContext()
 
+    /**
+     * A 12MP grade must complete at **full resolution**.
+     *
+     * This used to accept either outcome, because it did not fit: peak
+     * footprint was the source frame, a linear copy, a working copy, a
+     * quantisation copy and a re-materialised output frame, and on a 512MB
+     * heap that OOMed 48MB from the end. §12's retry then produced a 2048px
+     * image and the app shipped it as the master — a silent resolution
+     * downgrade, and the actual answer to "the grading gives bad outputs".
+     *
+     * Four of those allocations are gone, so the reduced path is now a genuine
+     * emergency rather than the normal case, and this asserts it. If it fails,
+     * exports on this class of device are quarter-resolution again and that is
+     * worth failing a build over.
+     */
     @Test
-    fun twelveMegapixelGradeCompletesAtFullOrHalfResolution() {
+    fun twelveMegapixelGradeCompletesAtFullResolution() {
         logHeap()
 
         val full = tryGrade(4000, 3000)
-        if (full != null) {
-            assertTrue("the encoder produced no output", full.jpeg.isNotEmpty())
-            return
-        }
 
-        Log.w(
-            TAG,
-            "12MP OOMed at full resolution — this device needs §12's retry on every " +
-                "large frame, which is a performance finding, not a crash.",
+        assertTrue(
+            "a 12MP grade ran out of memory at full resolution. Exports on this " +
+                "device would be 2048px masters — see the README's performance " +
+                "section before relaxing this.",
+            full != null,
         )
+        assertTrue("the encoder produced no output", full!!.jpeg.isNotEmpty())
+        assertEquals("the master must keep the source's geometry", 4000, full.width)
+        assertEquals(3000, full.height)
+    }
 
+    /** §12's retry still has to work, for the devices where it is reached. */
+    @Test
+    fun theHalfResolutionRetryStillProducesAnImage() {
         val reduced = requireNotNull(tryGrade(HALF_RESOLUTION_LONG_EDGE, 1536)) {
-            "§12's half-resolution retry also ran out of memory. Grading cannot " +
+            "§12's half-resolution retry ran out of memory. Grading cannot " +
                 "complete on this device at any resolution the app tries."
         }
         assertTrue(reduced.jpeg.isNotEmpty())

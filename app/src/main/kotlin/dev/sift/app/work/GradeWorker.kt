@@ -98,6 +98,7 @@ class GradeWorker @AssistedInject constructor(
                             Uri.parse(asset.uri),
                             settingsFor(asset, current),
                             decodeLongEdge = HALF_RESOLUTION_LONG_EDGE,
+                            reducedResolution = true,
                         )
                     }
                 }
@@ -179,6 +180,7 @@ class GradeWorker @AssistedInject constructor(
         uri: Uri,
         gradeSettings: dev.sift.model.GradeSettings,
         decodeLongEdge: Int?,
+        reducedResolution: Boolean = false,
     ): EditJob {
         val decoded = media.decode(uri, maxLongEdge = decodeLongEdge)
 
@@ -193,6 +195,10 @@ class GradeWorker @AssistedInject constructor(
                 // Seeded from the asset id so a regrade of the same photo
                 // produces a byte-identical file (§2.3).
                 ditherSeed = assetId,
+                // The decoded frame is not touched again after this call, so
+                // the pipeline may convert it in place rather than copying it.
+                // At 12MP that copy alone is ~144MB.
+                ownsSource = true,
             ),
         )
 
@@ -201,7 +207,23 @@ class GradeWorker @AssistedInject constructor(
         // byte-for-byte re-encode of a photo you already have: nothing to review,
         // nothing to approve, and §9.3 forbids ever trashing its original. Writing
         // it anyway just fills Pictures/Sift — and the gallery — with duplicates.
-        if (result.fellBackToOriginal) {
+        //
+        // A grade that only fitted in memory at reduced resolution is not a
+        // master, and must not be presented as one.
+        //
+        // §12's retry exists so one large frame cannot fail a batch, but its
+        // output is a 2048px image standing in for a 12MP photograph. Shipping
+        // that as the graded result meant a silent resolution downgrade, and
+        // §9.3 would then have been asked to authorise trashing the original —
+        // the one genuinely unrecoverable outcome in this app. It also could not
+        // pass: invariant 4 compares the export's dimensions against the
+        // source's, so every one of these was refused and requeued, to OOM and
+        // be refused again.
+        //
+        // Treated as a fallback instead: the original is kept, untouched, and
+        // the count is surfaced (§6.12) rather than the photo being quietly
+        // replaced by a smaller copy of itself.
+        if (result.fellBackToOriginal || reducedResolution) {
             return EditJob(
                 id = UUID.randomUUID().toString(),
                 sourceAssetId = assetId,

@@ -15,7 +15,7 @@ Built to [`SIFT_SPEC.md`](docs/SIFT_SPEC.md) v3.
 
 ## Status
 
-Current build: **0.2.4** (`versionCode` 10). `./gradlew build` is green, and
+Current build: **0.2.5** (`versionCode` 11). `./gradlew build` is green, and
 `./gradlew assembleRelease` produces a **3.0 MB signed APK** that `apksigner`
 verifies as installable across API 30–35.
 Download it from [`dist/`](dist/).
@@ -286,41 +286,50 @@ Where it came from, in rough order of contribution:
 
 ### On a device, the problem is memory before it is time
 
-The instrumented suite now measures this on an emulator, and the result is worse
+The instrumented suite measures this on an emulator, and the result was worse
 than the JVM figure suggested:
 
 ```
 heap: standard 192MB, large 512MB, max 512MB
 OOM grading 4000x3000: failed to allocate 48MB with 4.4MB until OOM,
   target footprint 536870912, growth limit 536870912
-12MP grade: 2048x1536 in 2462ms on 2 cores (§13 budget 2500ms)
 ```
 
-**A full 12MP grade does not complete in a 512MB heap.** Not "is slow" — it runs
-out of memory 48MB from the end. So on hardware in that class §12's
-half-resolution retry is not a rare safety net, it is the path every large photo
-takes, and the master that gets written is 2048px rather than 12MP. The app does
-not currently say so, which is the worse half of the problem.
+**A full 12MP grade did not complete in a 512MB heap.** Not "was slow" — it ran
+out of memory 48MB from the end. §12's half-resolution retry then produced a
+2048px image, and the app shipped that as the master. So on hardware in that
+class every large photo was silently downgraded to a quarter of its resolution,
+which is the honest answer to why graded output looked bad.
 
-The 2462ms figure is therefore *not* the budget being met: it is a quarter-pixel
-grade on two emulator cores. A real phone has more of both. The shape of the
-finding is what matters — peak footprint, not throughput, is what decides
-whether you get a full-resolution master.
+Peak footprint at 12MP was five full frames alive at once:
 
-Peak is roughly: a ~48MB decoded bitmap, a ~48MB int buffer, a ~144MB
-`FloatImage`, and a second ~144MB working copy inside the pipeline. 0.2.4 frees
-the bitmap before the float allocation, which takes ~48MB off. That is a step,
-not a fix. The remaining candidates, in order of how much they would buy:
+| | before | after |
+|---|---|---|
+| decoded bitmap held across the float allocation | 48MB | freed first |
+| source frame | 144MB | 144MB |
+| linear copy of the source | 144MB | *reuses the source* |
+| working copy (needed — retries re-copy from it) | 144MB | 144MB |
+| quantisation copy | 144MB | *quantises in place* |
+| output frame rebuilt from bytes for the gates | 144MB | *gates read the bytes* |
 
-1. **Convert in place instead of copying.** `Pipeline.process` copies the source
-   frame so it can leave the caller's image untouched; the worker never reuses
-   it. Worth ~144MB, at the cost of a mutating contract.
-2. **Tile the per-pixel passes.** Most of §6 is pointwise and already runs
-   row-parallel, so it could run on strips without holding a second full frame.
-3. **Fixed-point or NDK/SIMD**, which reopens the OpenCV decision above.
+Four of those are gone. The working copy stays because §6.12's retry chain needs
+an untouched frame to start each attempt from, and the source stays because it
+is that frame. `GradeMemoryTest` now **requires** a full-resolution 12MP grade
+rather than accepting either outcome, so a regression here fails the build.
 
-None of these are done. §13 says a missed budget means stop and fix, and this is
-the honest statement of where that stands.
+Two related changes: `Pipeline.Request.ownsSource` lets a caller that will not
+reuse its frame have it converted in place — a promise about the caller, not
+about the pipeline, so it defaults to false. And a grade that only fitted at
+reduced resolution is no longer written as a master at all; it is treated as a
+fallback, leaving the original untouched and reporting the count. A 2048px stand
+-in for a 12MP photograph could not pass §9.3's invariant 4 anyway, so those
+grades were being refused and requeued to OOM again in a loop.
+
+Timing is unchanged within measurement noise — 5.0s warm median against 5.4s
+before, on a container running at load 3.4. These changes bought resolution, not
+speed. §13's 2.5s budget is still missed by roughly 2×, and closing that is a
+different problem: fixed-point, tiling, or NDK/SIMD, which reopens the OpenCV
+decision above.
 
 ---
 

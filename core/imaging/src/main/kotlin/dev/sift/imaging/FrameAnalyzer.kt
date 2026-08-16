@@ -39,6 +39,14 @@ object FrameAnalyzer {
     /** Long edge of the stride-sampled proxy used for distribution statistics. */
     const val PROXY_LONG_EDGE = 512
 
+    /**
+     * A channel counts as clipped at or above this 8-bit value.
+     *
+     * 254, matching what the linear-domain threshold `srgbToLinear(254/255)`
+     * was reconstructing — the same test, without the round trip.
+     */
+    private const val CLIPPED_BYTE = 254
+
     /** L* above which a pixel counts as a clipped highlight (§6.3). */
     const val CLIPPED_HIGHLIGHT_L = 98f
 
@@ -170,6 +178,88 @@ object FrameAnalyzer {
      * Fields the gates do not use are left at their defaults; this struct is for
      * verification only and is never persisted as the frame's analysis.
      */
+    /**
+     * The gate figures, read straight from the encoded output bytes.
+     *
+     * The gates run on the *final* 8-bit image, and building a full
+     * `FloatImage` from it to measure three numbers cost another ~144MB at
+     * 12MP — on top of the source, the working copy and the byte buffer, all
+     * still live at that moment. That was a large part of why a
+     * full-resolution grade could not fit in a 512MB heap, which in turn meant
+     * §12 quietly downscaled every large photo to 2048px before exporting it.
+     *
+     * Nothing is approximated. Channel clipping is exact and simpler here — a
+     * channel is clipped when its byte is at or above 254, which is what the
+     * linear threshold was reconstructing. Lightness is the same L\* formula
+     * over the same values, and chroma still measures a strided proxy rather
+     * than the whole frame, as it always did.
+     */
+    fun analyzeForGates(rgb: ByteArray, width: Int, height: Int): FrameAnalysis {
+        val pixels = width * height
+        val lPlane = FloatArray(pixels)
+        var r = 0
+        var g = 0
+        var b = 0
+
+        Parallel.chunks(pixels) { from, to ->
+            var i = from * 3
+            for (p in from until to) {
+                val lr = ColorSpaces.srgbToLinear((rgb[i].toInt() and 0xFF) / 255f)
+                val lg = ColorSpaces.srgbToLinear((rgb[i + 1].toInt() and 0xFF) / 255f)
+                val lb = ColorSpaces.srgbToLinear((rgb[i + 2].toInt() and 0xFF) / 255f)
+                val y = YR * lr + YG * lg + YB * lb
+                val fy = if (y > DELTA_CUBED) cbrt(y.toDouble()) else y / DELTA_SQ_TIMES_3 + FOUR_TWENTY_NINTHS
+                lPlane[p] = (116.0 * fy - 16.0).toFloat()
+                i += 3
+            }
+        }
+
+        // Counted separately and single-threaded: three ints shared across
+        // chunks would need atomics for no measurable gain over one pass of
+        // byte comparisons.
+        var i = 0
+        while (i < rgb.size) {
+            if ((rgb[i].toInt() and 0xFF) >= CLIPPED_BYTE) r++
+            if ((rgb[i + 1].toInt() and 0xFF) >= CLIPPED_BYTE) g++
+            if ((rgb[i + 2].toInt() and 0xFF) >= CLIPPED_BYTE) b++
+            i += 3
+        }
+
+        val histogram = Statistics.histogram(lPlane, 0f, 100f)
+        val chroma = measureChroma(ColorSpaces.linearToLab(strideProxyFromBytes(rgb, width, height)))
+
+        return gateAnalysis(
+            histogram = histogram,
+            channelClipFractions = listOf(
+                r.toFloat() / pixels,
+                g.toFloat() / pixels,
+                b.toFloat() / pixels,
+            ),
+            chroma = chroma,
+        )
+    }
+
+    /** [strideProxy], sampled from encoded bytes so no full frame is built. */
+    private fun strideProxyFromBytes(rgb: ByteArray, width: Int, height: Int): FloatImage {
+        val stride = max(1, (max(width, height) + PROXY_LONG_EDGE - 1) / PROXY_LONG_EDGE)
+        val pw = (width + stride - 1) / stride
+        val ph = (height + stride - 1) / stride
+        val out = FloatImage.alloc(pw, ph, ColorSpaceTag.LINEAR_SRGB)
+        var d = 0
+        for (y in 0 until ph) {
+            val sy = (y * stride).coerceAtMost(height - 1)
+            for (x in 0 until pw) {
+                val sx = (x * stride).coerceAtMost(width - 1)
+                val s = (sy * width + sx) * 3
+                out.data[d] = ColorSpaces.srgbToLinear((rgb[s].toInt() and 0xFF) / 255f)
+                out.data[d + 1] = ColorSpaces.srgbToLinear((rgb[s + 1].toInt() and 0xFF) / 255f)
+                out.data[d + 2] = ColorSpaces.srgbToLinear((rgb[s + 2].toInt() and 0xFF) / 255f)
+                d += 3
+            }
+        }
+        return out
+    }
+
     fun analyzeForGates(image: FloatImage): FrameAnalysis {
         image.requireSpace(ColorSpaceTag.LINEAR_SRGB, "analyzeForGates")
 
@@ -178,36 +268,54 @@ object FrameAnalyzer {
         val proxy = strideProxy(image)
         val chroma = measureChroma(ColorSpaces.linearToLab(proxy))
 
-        return FrameAnalysis(
-            medianL = histogram.median(),
-            clippedHighlightFraction = histogram.fractionAtOrAbove(CLIPPED_HIGHLIGHT_L),
-            crushedShadowFraction = histogram.fractionBelow(CRUSHED_SHADOW_L),
-            blackPointL = histogram.percentile(0.001f),
-            whitePointL = histogram.percentile(0.999f),
-            dynamicRange = histogram.percentile(0.999f) - histogram.percentile(0.001f),
-            histogramEntropy = histogram.normalisedEntropy(),
+        return gateAnalysis(
+            histogram = histogram,
             channelClipFractions = measureChannelClipping(image),
-            greyWorldCastA = chroma.midBandA,
-            greyWorldCastB = chroma.midBandB,
-            meanChroma = chroma.mean,
-            chromaP95 = chroma.p95,
-            skinFraction = 0f,
-            largestSkinRegionFraction = 0f,
-            skinMedianL = null, skinMedianA = null, skinMedianB = null,
-            laplacianVariance = 0f,
-            laplacianVarianceP90 = 0f,
-            noiseSigmaLuma = 0f,
-            noiseSigmaChroma = 0f,
-            flatRegionFraction = 0f,
-            faceCount = 0,
-            faceBoxes = emptyList(),
-            isLikelyScreenshot = false,
-            isLikelyDocument = false,
-            edgeDensity = 0f,
-            sourceWidth = image.width,
-            sourceHeight = image.height,
+            chroma = chroma,
         )
     }
+
+    /**
+     * The gate-relevant subset of [FrameAnalysis], with everything no gate reads
+     * left at zero.
+     *
+     * Shared by both `analyzeForGates` overloads so the float path and the byte
+     * path cannot drift into reporting different fields — a gate that passed
+     * from one input and failed from the other would be very hard to see.
+     */
+    private fun gateAnalysis(
+        histogram: Statistics.Histogram,
+        channelClipFractions: List<Float>,
+        chroma: ChromaStats,
+    ) = FrameAnalysis(
+        medianL = histogram.median(),
+        clippedHighlightFraction = histogram.fractionAtOrAbove(CLIPPED_HIGHLIGHT_L),
+        crushedShadowFraction = histogram.fractionBelow(CRUSHED_SHADOW_L),
+        blackPointL = histogram.percentile(0.001f),
+        whitePointL = histogram.percentile(0.999f),
+        dynamicRange = histogram.percentile(0.999f) - histogram.percentile(0.001f),
+        histogramEntropy = histogram.normalisedEntropy(),
+        channelClipFractions = channelClipFractions,
+        greyWorldCastA = chroma.midBandA,
+        greyWorldCastB = chroma.midBandB,
+        meanChroma = chroma.mean,
+        chromaP95 = chroma.p95,
+        skinFraction = 0f,
+        largestSkinRegionFraction = 0f,
+        skinMedianL = null, skinMedianA = null, skinMedianB = null,
+        laplacianVariance = 0f,
+        laplacianVarianceP90 = 0f,
+        noiseSigmaLuma = 0f,
+        noiseSigmaChroma = 0f,
+        flatRegionFraction = 0f,
+        faceCount = 0,
+        faceBoxes = emptyList(),
+        isLikelyScreenshot = false,
+        isLikelyDocument = false,
+        edgeDensity = 0f,
+        sourceWidth = 0,
+        sourceHeight = 0,
+    )
 
     // ---- Building blocks ---------------------------------------------------
 
