@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
+import dev.sift.model.GradeProfile
 import dev.sift.model.JobState
 import dev.sift.model.LifecycleState
 import dev.sift.model.RejectionReason
@@ -84,6 +85,17 @@ interface MediaAssetDao {
 
     @Query("UPDATE media_assets SET clusterId = :clusterId WHERE id = :id")
     suspend fun setCluster(id: Long, clusterId: String?)
+
+    /** Arm a one-shot override for the next grade of this asset (§9.5). */
+    @Query(
+        "UPDATE media_assets SET pendingProfile = :profile, pendingStrengthScale = :strength " +
+            "WHERE id = :id",
+    )
+    suspend fun setRegradeOverride(id: Long, profile: GradeProfile?, strength: Float?)
+
+    /** Clear it once the grade has consumed it, so a later grade is unaffected. */
+    @Query("UPDATE media_assets SET pendingProfile = NULL, pendingStrengthScale = NULL WHERE id = :id")
+    suspend fun clearRegradeOverride(id: Long)
 
     @Query("UPDATE media_assets SET analysisJson = :json, contentClass = :contentClass, dHash = :dHash WHERE id = :id")
     suspend fun setAnalysis(
@@ -185,6 +197,20 @@ interface EditJobDao {
     /** §6.12: "surface fallbacks in the UI — a silent fallback teaches you nothing." */
     @Query("SELECT COUNT(*) FROM edit_jobs WHERE fellBackToOriginal = 1")
     fun fallbackCount(): Flow<Int>
+
+    /**
+     * Fallback jobs that still have a file on disk.
+     *
+     * Versions before 0.1.4 wrote an export even when a gate failed, which
+     * produced a byte-identical re-encode of a photo the library already had.
+     * Those files are still sitting in Pictures/Sift; this is how they get found
+     * so the user can clear them out.
+     */
+    @Query("SELECT * FROM edit_jobs WHERE fellBackToOriginal = 1 AND outputUri IS NOT NULL")
+    suspend fun fallbacksWithOutput(): List<EditJob>
+
+    @Query("UPDATE edit_jobs SET outputUri = NULL WHERE id = :id")
+    suspend fun clearOutputUri(id: String)
 
     @Query(
         """

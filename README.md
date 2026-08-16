@@ -15,31 +15,35 @@ Built to [`SIFT_SPEC.md`](docs/SIFT_SPEC.md) v3.
 
 ## Status
 
-Every module compiles. `./gradlew build` is green, and `./gradlew assembleRelease`
-produces a **2.9 MB signed APK** that `apksigner` verifies as installable across
-API 30–35.
+Current build: **0.2.0** (`versionCode` 6). `./gradlew build` is green, and
+`./gradlew assembleRelease` produces a **3.0 MB signed APK** that `apksigner`
+verifies as installable across API 30–35.
+Download it from [`dist/`](dist/).
 
 | Milestone | Deliverable | State |
 |---|---|---|
-| **M0** | Permissions, MediaStore, thumbnail grid | Builds; **not yet run on a device** |
-| **M1** | Swipe deck, Room, undo, batched trash | Builds; **not yet run on a device** |
-| **M2** | dHash, clustering, screenshot detection | Logic tested; UI not yet run |
+| **M0** | Permissions, MediaStore, thumbnail grid | **Run on a device**; empty-library bug fixed in 0.1.2 |
+| **M1** | Swipe deck, Room, undo, batched trash | **Run on a device**; per-photo rescue added in 0.1.4 |
+| **M2** | dHash, clustering, screenshot detection | Logic tested; run on a device, thresholds unvalidated |
 | **M3** | Float pipeline + `FrameAnalysis` + Portrait grade | **Done and tested** |
 | **M4** | Scene grade + router | **Done and tested** |
 | **M5** | Quality gates + fallback | **Done and tested** |
-| **M6** | Export presets, encode, EXIF, settings | Encode + presets tested; EXIF path not yet run |
-| **M7** | Review UI, lifecycle, deferred original-trashing | Builds; **not yet run on a device** |
+| **M6** | Export presets, encode, EXIF, settings | **Run on a device**; capture date preserved since 0.1.2 |
+| **M7** | Review UI, lifecycle, deferred original-trashing | **Run on a device**; approve-and-trash still unproven |
 | **M8** | Upscale | **Deliberately not built** — see below |
 
-**Of 47 tests, 46 pass and 1 is deliberately skipped** (§14.1, which needs your
-own fixtures — see below).
+**Of 48 tests, 46 pass and 2 are skipped by design** — §14.1 needs your own
+fixtures (see below), and `PipelineBenchmark` is opt-in because it takes a
+minute.
 
-> **The honest caveat: no part of this has run on a phone yet.** It compiles,
-> R8 does not strip anything it needs, the tests that can run do run, and the
-> APK installs — but the UI, the MediaStore reads, the trash dialogs and the
-> EXIF copy have never executed against real Android. Treat the first session as
-> a shakedown, and see [what is not proven](#what-is-not-proven) before trusting
-> it with the approve-and-trash step.
+> **It now runs on real hardware, and that is where every bug since 0.1.0 came
+> from.** An empty library (MediaStore paging), exports landing in the gallery
+> with today's date, undo that never returned a photo, and a run where most
+> frames failed a quality gate and were shipped as originals — none of those
+> were visible from a green test suite. What is *still* unproven is the
+> approve-and-trash step, because its failure mode is permanent photo loss and
+> no instrumented test covers it yet. See
+> [what is not proven](#what-is-not-proven).
 
 ```sh
 ./gradlew :core:imaging:test   # the pipeline — needs only a JDK, no Android SDK
@@ -79,8 +83,8 @@ Three things follow from it:
 - The ~15MB native dependency and its ABI restriction go away.
 
 The cost is real: several hundred lines of image maths that OpenCV would have
-provided, and no SIMD. §13's performance budgets are consequently **unmeasured**
-— see below.
+provided, and no SIMD. It shows up in §13's budgets — see
+[performance](#performance) below.
 
 ### 2. The JPEG encoder is hand-written.
 
@@ -161,17 +165,15 @@ new clipping. See `SceneGrade.COMPOSED_BLACK_FLOOR_L`.
   the test turns on. It reports as *skipped* rather than passing vacuously,
   because a green parity test with no fixtures is worse than none on the one gate
   §6.2 calls the only defence against the LAB trap.
-- **§13's performance budgets are unmeasured.** No device, no numbers. The pure
-  Kotlin pipeline has no SIMD, and the analysis pass takes a full-resolution
-  Laplacian and a cube root per pixel. §13 says a miss means stop and fix — that
-  measurement has not happened, and the 12MP figures are the ones to check first.
-- **Nothing has run on a device.** This is the big one. Compiling proves the
-  types line up; it proves nothing about whether the swipe deck feels right,
-  whether `createTrashRequest` returns what the code expects, whether the EXIF
-  copy actually preserves GPS, or whether a 12MP grade finishes before the
-  system kills the service. There are no instrumented tests yet — §14's
-  device-dependent cases (§14.7 memory, §14.8 cancelled dialog, §14.10
-  original-retention) are specified and unwritten.
+- **§13's 12MP budget is missed on the JVM and unmeasured on a phone.** See
+  [performance](#performance).
+- **The approve-and-trash step has never been exercised end to end.** The rest
+  of the app has now run on hardware, but nothing has yet confirmed that
+  `createTrashRequest` returns what the code expects for approved originals, or
+  that a cancelled dialog leaves state consistent. There are no instrumented
+  tests — §14's device-dependent cases (§14.7 memory, §14.8 cancelled dialog,
+  §14.10 original-retention) are specified and unwritten. §14.10 is the one
+  whose failure mode is permanent photo loss.
 - **§14.4 router accuracy, §14.5 clustering precision/recall** need hand-labelled
   real photographs; the synthetic fixtures show the mechanisms work, not that the
   thresholds are right for your library.
@@ -193,6 +195,53 @@ vacuously:
   `gateResultsJson` are not optional (§6.3, §5) — a minified build that lost
   `FrameAnalysis$$serializer` would throw at runtime on the first graded photo.
   The release APK is checked to still contain them.
+
+---
+
+## Performance
+
+§13 budgets a 12MP grade at **2.5s**. It is not met.
+
+Measured on a 4-core x86 JVM (`./gradlew :core:imaging:test -Dsift.bench=true`,
+`PipelineBenchmark`, 4000×3000 portrait, MASTER preset):
+
+| | 12MP grade |
+|---|---|
+| cold (first frame, JIT warming) | 8.7s |
+| warm median | **5.4s** |
+| §13 budget | 2.5s |
+
+The same benchmark on the 0.1.4 pipeline measured a 12.1s warm median, so this
+is roughly a 2× improvement that still lands at a bit over twice the budget.
+Where it came from, in rough order of contribution:
+
+- **Row-parallel per-pixel passes** (`Parallel`). Every colour conversion, tone
+  curve, blur and DCT is independent per row and was running on one thread.
+  §4.3's limit of 2 concurrent frames is a cap on how many photos are in flight
+  — a 12MP frame is ~144MB as float and three at once will OOM — not on how
+  many cores may work on one of them. Dither is deliberately excluded: it draws
+  from a seeded RNG in a fixed sequence (§2.3), and reproducibility is what
+  lets `BandingTest` assert anything, so it parallelises over fixed chunks with
+  per-chunk seeds rather than over rows.
+- **sRGB transfer functions became table lookups.** A `pow(x, 1/2.4)` per
+  channel per pixel is 36M calls on a 12MP frame; an 8192-entry LUT with
+  interpolation is within float precision of the exact curve, and the exact
+  form is still used outside [0,1] where §2.1's unbounded values live.
+- **Local contrast blurs at quarter scale** and expands bilinearly. A
+  large-radius low-frequency blur has nothing above the Nyquist limit of the
+  downscaled grid to lose.
+- **The sharpness gate samples** rather than taking a full-resolution Laplacian,
+  and reuses the source's variance when the geometry did not change.
+- **Ingest stopped decoding at full resolution.** The dHash needs 1024px on the
+  long edge, and it was decoding 12MP frames to compute a 64-bit number.
+
+The honest caveat: this is a JVM measurement, so it says the pipeline got
+roughly twice as fast and does not say what a phone does. A phone has different
+memory bandwidth, a big.LITTLE core mix and thermal throttling, none of which
+are represented here. §13 says a missed budget means stop and fix; the next
+step is an instrumented run, and closing the remaining gap is likely to need
+either a fixed-point path or NDK/SIMD — which would reopen the OpenCV decision
+above.
 
 ---
 

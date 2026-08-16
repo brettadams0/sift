@@ -8,16 +8,25 @@ Play distribution makes painful, and there is nobody to distribute it to.
 
 ## 1. Put the APK on the phone
 
-Grab `app-release.apk` — either the one built for you, or from the **Actions** tab
-of this repo (any green `Android build` run has it as the `sift-release-apk`
-artifact).
+Open this link in the phone's browser and tap download:
 
-Move it to the phone however you like: USB, `adb install`, Nearby Share, or a
-cloud drive. If you have `adb`:
+**https://github.com/brettadams0/sift/raw/main/dist/sift-0.2.0-release.apk**
+
+Or take it from the **Actions** tab of this repo — any green `Android build` run
+carries it as the `sift-release-apk` artifact — or build it yourself with
+`./gradlew assembleRelease`.
+
+If you have `adb`:
 
 ```sh
-adb install -r app-release.apk
+adb install -r sift-0.2.0-release.apk
 ```
+
+`-r` matters: it reinstalls over an existing copy and **keeps your database**,
+so pending deletions and photos awaiting review survive the upgrade. Every build
+is signed with the same key, so this works from any earlier version. Never
+uninstall to get around a signature error — that erases the queues along with
+the app.
 
 ## 2. Allow the install
 
@@ -71,6 +80,11 @@ device; the cloud copy is yours to manage (§1).
    system trash dialog (§8). Cancel it and every decision is still there — you
    will not have to re-triage.
 
+   If you tossed something by accident and only notice later, open **Pending
+   deletions** from the home screen: every queued photo is there as a thumbnail
+   with a ↩ to pull that one back out. Undo covers the last ten decisions in
+   order; this covers any of them, at any time before you commit.
+
 4. **Keepers get graded automatically** once you commit, if the battery is above
    30% or you are charging; otherwise it waits until you plug in (§9.2). A
    notification shows progress. It is safe to kill the app — the batch resumes
@@ -84,16 +98,24 @@ device; the cloud copy is yours to manage (§1).
 
 6. **Originals are only trashed when you approve.** That is a separate,
    second confirmation with different wording, never mixed into the triage batch
-   (§8, trap #16). If a quality gate failed and Sift shipped your original
-   unchanged, the control is **disabled with the reason shown** — trashing that
-   original would leave a re-encode as your only master (§9.3).
+   (§8, trap #16). An original whose grade fell back is never eligible —
+   trashing it would leave a re-encode as your only master (§9.3).
+
+**Frames that failed a quality gate do not reach Review.** If the pipeline could
+not improve a photo, it ships your original untouched and there is no decision
+left to make, so it is closed out rather than queued. Earlier builds parked
+these in Review and you ended up rejecting photos that were never changed. The
+count is in **Settings**, with the gate that failed.
 
 ---
 
 ## Rejecting is how you tune it
 
-When a graded photo is wrong, reject it and pick a reason. That one tap is the
-only signal Sift gets (§9.5). After 50 rejections, **Settings** shows the
+Reject a graded photo and it is gone from the queue immediately — no dialog, no
+interrogation. The confirmation snackbar carries a **Why?** action if you want
+to say what was wrong; ignoring it is the normal case and costs nothing. That
+optional tap is the only signal Sift gets (§9.5). After 50 rejections,
+**Settings** shows the
 distribution — a run of `TOO_WARM` means the b\* target of 17.0 is high for your
 lighting, and you change one number instead of guessing.
 

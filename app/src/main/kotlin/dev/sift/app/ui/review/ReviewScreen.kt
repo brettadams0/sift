@@ -252,20 +252,30 @@ private fun ComparableFrame(
                     )
                 },
         ) {
+            // Both images stay loaded and only their opacity swaps. Swapping the
+            // model instead made every press-and-hold a fresh decode, so the
+            // comparison flickered and arrived late — and a colour comparison you
+            // cannot make instantly is one you cannot make at all (§9.4).
+            val frame = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offsetX
+                    translationY = offsetY
+                }
+
             AsyncImage(
-                // Swapping only the model keeps the transform state intact, so
-                // the comparison holds at whatever zoom and pan you were at.
-                model = if (comparing) originalUri else gradedUri,
+                model = gradedUri,
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        translationX = offsetX
-                        translationY = offsetY
-                    },
+                modifier = frame.graphicsLayer { alpha = if (comparing) 0f else 1f },
+            )
+            AsyncImage(
+                model = originalUri,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = frame.graphicsLayer { alpha = if (comparing) 1f else 0f },
             )
         }
     }

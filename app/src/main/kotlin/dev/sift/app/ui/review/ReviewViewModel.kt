@@ -269,12 +269,16 @@ class ReviewViewModel @Inject constructor(
                         GradeProfile.PORTRAIT
                     }
                     lifecycle.reject(item.job, null)
+                    // Armed on the asset, not stamped onto the discarded job:
+                    // the worker re-routes from scratch and would otherwise pick
+                    // the same profile again.
+                    mediaAssets.setRegradeOverride(item.asset.id, other, null)
                     lifecycle.requeueForGrade(item.asset.id, "regrade as ${other.name.lowercase()}")
-                    editJobs.upsert(item.job.copy(profile = other, profileWasManual = true))
                     GradeWorker.enqueue(getApplication(), force = true)
                 }
                 RegradeAction.REDUCED_STRENGTH -> {
                     lifecycle.reject(item.job, null)
+                    mediaAssets.setRegradeOverride(item.asset.id, null, REDUCED_STRENGTH_SCALE)
                     lifecycle.requeueForGrade(item.asset.id, "regrade at reduced strength")
                     GradeWorker.enqueue(getApplication(), force = true)
                 }
@@ -386,6 +390,11 @@ class ReviewViewModel @Inject constructor(
                 "Most rejections are 'lost detail'. Try turning upscale off, or check denoise strength."
             RejectionReason.PREFER_ORIGINAL -> "Most rejections prefer the original as shot."
         }
+    }
+
+    companion object {
+        /** §9.5: "regrade at reduced strength — all adaptive amounts x 0.5". */
+        const val REDUCED_STRENGTH_SCALE = 0.5f
     }
 
     private fun advance() {

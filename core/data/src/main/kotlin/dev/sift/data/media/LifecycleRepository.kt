@@ -327,6 +327,42 @@ class LifecycleRepository @Inject constructor(
     suspend fun strandedApprovals(): List<Long> =
         db.mediaAssets().inStateNow(LifecycleState.APPROVED).map { it.id }
 
+    /**
+     * How many duplicate exports an older version left behind.
+     *
+     * Surfaced as a count before anything is deleted. Sift wrote these files and
+     * has a record of every one, so removing them is cleaning up after itself
+     * rather than reaching into the library — but they are still the user's
+     * files, so it stays an explicit action rather than something that happens
+     * on launch.
+     */
+    suspend fun staleExportCount(): Int = db.editJobs().fallbacksWithOutput().size
+
+    /**
+     * Delete the re-encoded duplicates left by versions before 0.1.4.
+     *
+     * Only touches files recorded as the output of a job that fell back, which
+     * by definition are byte-identical re-encodes of an original the library
+     * still holds. The originals are never touched — §9.3 forbids trashing the
+     * original of a fallback in the first place.
+     *
+     * @return how many files were removed.
+     */
+    suspend fun cleanUpStaleExports(): Int {
+        var removed = 0
+        for (job in db.editJobs().fallbacksWithOutput()) {
+            val uri = job.outputUri ?: continue
+            val deleted = runCatching {
+                resolver.delete(Uri.parse(uri), null, null) > 0
+            }.getOrDefault(false)
+            // Clear the reference either way: if the file is already gone, the
+            // row should stop claiming it exists.
+            db.editJobs().clearOutputUri(job.id)
+            if (deleted) removed++
+        }
+        return removed
+    }
+
     data class Refusal(val assetId: Long, val reason: String)
 
     data class ApprovedOriginalsBatch(

@@ -84,7 +84,7 @@ class GradeWorker @AssistedInject constructor(
             val outcome = runCatching {
                 withContext(imagingDispatcher) {
                     try {
-                        gradeOne(asset.id, Uri.parse(asset.uri), current, decodeLongEdge = null)
+                        gradeOne(asset.id, Uri.parse(asset.uri), settingsFor(asset, current), decodeLongEdge = null)
                     } catch (oom: OutOfMemoryError) {
                         // §12: "OOM during processing — catch, release Mats,
                         // retry once at half resolution, then fail the job."
@@ -96,7 +96,7 @@ class GradeWorker @AssistedInject constructor(
                         gradeOne(
                             asset.id,
                             Uri.parse(asset.uri),
-                            current,
+                            settingsFor(asset, current),
                             decodeLongEdge = HALF_RESOLUTION_LONG_EDGE,
                         )
                     }
@@ -105,6 +105,7 @@ class GradeWorker @AssistedInject constructor(
 
             outcome.onSuccess { job ->
                 editJobs.upsert(job)
+                mediaAssets.clearRegradeOverride(asset.id)
                 if (job.fellBackToOriginal) {
                     // Terminal, not pending: there is no decision for the user to
                     // make. Parking these in the review queue meant scrolling
@@ -128,6 +129,35 @@ class GradeWorker @AssistedInject constructor(
         }
 
         return Result.success()
+    }
+
+    /**
+     * Fold any one-shot regrade override into the settings for this asset (§9.5).
+     *
+     * "Regrade at reduced strength" and "regrade with the other profile" are
+     * per-asset decisions, but grading reads global settings — so without this
+     * both actions re-derived exactly the same grade they had just been asked to
+     * change.
+     */
+    private fun settingsFor(
+        asset: dev.sift.data.db.MediaAsset,
+        base: dev.sift.model.GradeSettings,
+    ): dev.sift.model.GradeSettings {
+        var result = base
+        asset.pendingStrengthScale?.let { result = result.copy(strengthScale = it) }
+        asset.pendingProfile?.let {
+            result = result.copy(
+                routing = when (it) {
+                    dev.sift.model.GradeProfile.PORTRAIT ->
+                        dev.sift.model.GradeSettings.RoutingMode.FORCE_PORTRAIT
+                    dev.sift.model.GradeProfile.SCENE ->
+                        dev.sift.model.GradeSettings.RoutingMode.FORCE_SCENE
+                    dev.sift.model.GradeProfile.NONE ->
+                        dev.sift.model.GradeSettings.RoutingMode.OFF
+                },
+            )
+        }
+        return result
     }
 
     /**
