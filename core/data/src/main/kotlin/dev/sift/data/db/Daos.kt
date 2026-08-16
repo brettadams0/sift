@@ -169,7 +169,27 @@ interface EditJobDao {
     @Query("SELECT * FROM edit_jobs WHERE id = :id")
     suspend fun byId(id: String): EditJob?
 
-    @Query("SELECT * FROM edit_jobs WHERE sourceAssetId = :assetId ORDER BY processingMs DESC LIMIT 1")
+    /**
+     * The most recent job for an asset — by `createdAt`, not `processingMs`.
+     *
+     * This used to order on `processingMs`, which is how *long* the grade took,
+     * so "latest" actually meant "slowest". [dev.sift.data.media.ApprovalGuard]
+     * reads this job's `approvedAt` as invariant 5, so once an asset has more
+     * than one job a stale approval could stand in for consent to a grade the
+     * user has never seen. A second job per asset is normal, not exotic: §12's
+     * requeue path and §9.5's regrade actions both produce one.
+     *
+     * `rowid` breaks ties for rows written before `createdAt` existed, which
+     * migrate in with 0.
+     */
+    @Query(
+        """
+        SELECT * FROM edit_jobs
+        WHERE sourceAssetId = :assetId
+        ORDER BY createdAt DESC, rowid DESC
+        LIMIT 1
+        """,
+    )
     suspend fun latestForAsset(assetId: Long): EditJob?
 
     @Query("SELECT * FROM edit_jobs WHERE state = :state")

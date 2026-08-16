@@ -218,6 +218,7 @@ class GradeWorker @AssistedInject constructor(
                 rejectedAt = System.currentTimeMillis(),
                 rejectionReason = null,
                 originalTrashedAt = null,
+                createdAt = System.currentTimeMillis(),
             )
         }
 
@@ -256,6 +257,7 @@ class GradeWorker @AssistedInject constructor(
             rejectedAt = null,
             rejectionReason = null,
             originalTrashedAt = null,
+            createdAt = System.currentTimeMillis(),
         )
     }
 
@@ -275,6 +277,7 @@ class GradeWorker @AssistedInject constructor(
         rejectedAt = null,
         rejectionReason = null,
         originalTrashedAt = null,
+        createdAt = System.currentTimeMillis(),
     ).also { GradeLog.record(assetId, error) }
 
     companion object {

@@ -15,7 +15,7 @@ Built to [`SIFT_SPEC.md`](docs/SIFT_SPEC.md) v3.
 
 ## Status
 
-Current build: **0.2.1** (`versionCode` 7). `./gradlew build` is green, and
+Current build: **0.2.2** (`versionCode` 8). `./gradlew build` is green, and
 `./gradlew assembleRelease` produces a **3.0 MB signed APK** that `apksigner`
 verifies as installable across API 30–35.
 Download it from [`dist/`](dist/).
@@ -40,10 +40,13 @@ minute.
 > from.** An empty library (MediaStore paging), exports landing in the gallery
 > with today's date, undo that never returned a photo, and a run where most
 > frames failed a quality gate and were shipped as originals — none of those
-> were visible from a green test suite. What is *still* unproven is the
-> approve-and-trash step, because its failure mode is permanent photo loss and
-> no instrumented test covers it yet. See
-> [what is not proven](#what-is-not-proven).
+> were visible from a green test suite. Approve-and-trash — the one path whose
+> failure mode is permanent photo loss — now has device tests, and **their first
+> CI run found two more**: §12's requeue was dead code because the lifecycle
+> table would not let an approved asset leave that state, and "the latest job
+> for this asset" was resolved by ordering on grade *duration*, so a stale
+> approval could authorise trashing an original whose current grade had never
+> been seen. See [what is not proven](#what-is-not-proven) for what remains.
 
 ```sh
 ./gradlew :core:imaging:test   # the pipeline — needs only a JDK, no Android SDK
@@ -185,6 +188,23 @@ They stop at the system dialog: `createTrashRequest` returns a `PendingIntent`
 only the system's confirmation UI can resolve. So the assertions are about which
 asset ids Sift *puts into* a request — the part Sift controls, and the part that
 can be wrong.
+
+**What the first run found.** Two defects, both in the safety path, both
+invisible to 48 green unit tests:
+
+- `APPROVED` listed `ORIGINAL_TRASHED` as its only exit, so §12's
+  `requeueForGrade` — the recovery for an export that stopped decoding — returned
+  false and did nothing. Affected assets sat approved with a broken export
+  forever, re-refused on every batch.
+- `latestForAsset` ordered by `processingMs`, the grade's *duration*. "Latest"
+  therefore meant "slowest". Since `ApprovalGuard` reads that job's `approvedAt`
+  as invariant 5, an asset with more than one job could have a stale approval
+  stand in for consent to a grade the user had never seen — and fixing the first
+  defect is what makes a second job routine. `EditJob` gained `createdAt`
+  (schema v3).
+
+Neither could have been caught without enumerating the state table on a real
+device, which is the argument for this suite existing.
 
 ### What is not proven
 

@@ -79,7 +79,7 @@ class Converters {
         EditJob::class,
         LifecycleEvent::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -107,6 +107,25 @@ abstract class SiftDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS = arrayOf(MIGRATION_1_2)
+        /**
+         * v2 → v3: `edit_jobs.createdAt`.
+         *
+         * "The latest job for this asset" was resolved by ordering on
+         * `processingMs` — the grade's *duration* — so it returned the slowest
+         * job rather than the newest. `ApprovalGuard` reads that job's
+         * `approvedAt` as §9.3 invariant 5, which made a stale approval able to
+         * stand in for consent to a grade the user had never seen.
+         *
+         * Existing rows migrate in with 0 and are then ordered by `rowid`,
+         * which for an append-only table is insertion order — the right answer
+         * for history written before the column existed.
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE edit_jobs ADD COLUMN createdAt INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
     }
 }

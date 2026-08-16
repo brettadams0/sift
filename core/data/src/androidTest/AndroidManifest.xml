@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      largeHeap must match what ships.
+
+      The app declares it (see app/src/main/AndroidManifest.xml) because §2.1's
+      working format is unbounded float and a 12MP frame is ~144MB on its own.
+      Without it here the test process ran on the default heap — 192MB on the
+      CI emulator — and OOMed on the first allocation, which measured a
+      configuration nobody uses.
+    -->
+    <application android:largeHeap="true" />
+</manifest>

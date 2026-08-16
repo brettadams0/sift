@@ -220,6 +220,78 @@ class OriginalRetentionTest {
     }
 
     /**
+     * A regrade must not inherit the previous grade's approval.
+     *
+     * Once §12's requeue path works, an asset routinely carries more than one
+     * job. `latestForAsset` resolved "latest" by ordering on `processingMs` —
+     * the grade's *duration* — so the slowest job won, and `ApprovalGuard` read
+     * its `approvedAt` as invariant 5. A slow, approved, superseded grade could
+     * therefore authorise trashing an original whose current grade the user has
+     * never seen.
+     *
+     * The old job here is deliberately given the larger `processingMs` and the
+     * earlier `createdAt`, which is exactly the shape that used to invert the
+     * answer.
+     */
+    @Test
+    fun aRegradeDoesNotInheritThePreviousApproval() = runTest {
+        val original = jpeg()
+        val staleOutput = jpeg()
+        val freshOutput = jpeg()
+
+        db.mediaAssets().insertAll(
+            listOf(ApprovalFixtures.asset(1L, original, 64, 48, LifecycleState.APPROVED)),
+        )
+        // Approved, and slow.
+        db.editJobs().upsert(
+            ApprovalFixtures.job(
+                assetId = 1L,
+                outputUri = staleOutput,
+                approvedAt = 1_000L,
+                createdAt = 1_000L,
+                processingMs = 90_000L,
+            ),
+        )
+        // The regrade: newer, quicker, and never approved.
+        db.editJobs().upsert(
+            ApprovalFixtures.job(
+                assetId = 1L,
+                outputUri = freshOutput,
+                approvedAt = null,
+                createdAt = 2_000L,
+                processingMs = 500L,
+            ),
+        )
+
+        assertEquals(
+            "latest must mean newest, not slowest",
+            freshOutput.toString(),
+            db.editJobs().latestForAsset(1L)!!.outputUri,
+        )
+
+        val batch = repo.buildApprovedOriginalsRequest()
+        assertNull(
+            "an unapproved regrade must not be trashable on the strength of an older approval",
+            batch.request,
+        )
+        assertTrue(batch.refusals.any { it.assetId == 1L })
+    }
+
+    /**
+     * §12's recovery is only recovery if the state machine allows it.
+     *
+     * `APPROVED` used to lead only to `ORIGINAL_TRASHED`, so `requeueForGrade`
+     * returned false and did nothing: an asset with a broken export stayed
+     * approved forever, never regraded, re-refused on every batch.
+     */
+    @Test
+    fun approvedCanReturnToTheGradingQueue() = runTest {
+        assertTrue(
+            repo.canTransition(LifecycleState.APPROVED, LifecycleState.QUEUED_FOR_GRADE),
+        )
+    }
+
+    /**
      * Approval on its own trashes nothing. It only moves the asset into the one
      * state batch 2 can be built from — the guard runs later, at build time.
      */

@@ -107,6 +107,9 @@ object ApprovalFixtures {
         fellBack: Boolean = false,
         state: JobState = JobState.DONE,
         approvedAt: Long? = System.currentTimeMillis(),
+        createdAt: Long = System.currentTimeMillis(),
+        /** Set explicitly when a test needs one job to look slower than another. */
+        processingMs: Long = 1_000L + assetId,
     ) = EditJob(
         id = UUID.randomUUID().toString(),
         sourceAssetId = assetId,
@@ -117,12 +120,13 @@ object ApprovalFixtures {
         upscaleFactor = 1f,
         gateResultsJson = "{}",
         fellBackToOriginal = fellBack,
-        processingMs = 1_000L + assetId,
+        processingMs = processingMs,
         state = state,
         approvedAt = approvedAt,
         rejectedAt = null,
         rejectionReason = null,
         originalTrashedAt = null,
+        createdAt = createdAt,
     )
 
     /** Remove everything this run wrote, whether or not the test passed. */

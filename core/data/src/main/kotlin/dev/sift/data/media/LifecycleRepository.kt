@@ -66,7 +66,28 @@ class LifecycleRepository @Inject constructor(
             LifecycleState.QUEUED_FOR_GRADE,
             LifecycleState.DO_NOT_GRADE,
         ),
-        LifecycleState.APPROVED to setOf(LifecycleState.ORIGINAL_TRASHED),
+        /**
+         * `QUEUED_FOR_GRADE` is here because §12's recovery path needs it, and
+         * without it that path was silently dead.
+         *
+         * When [buildApprovedOriginalsRequest] refuses a candidate with
+         * `requeueGrade` — the export stopped decoding, or came out the wrong
+         * size — it calls [requeueForGrade]. With `ORIGINAL_TRASHED` as the only
+         * exit from `APPROVED`, that call returned false and did nothing, so the
+         * asset sat approved with a broken export forever: never regraded, never
+         * trashed, re-refused on every subsequent batch. Found by
+         * `OriginalRetentionTest`, which is exactly the kind of thing a state
+         * table hides until something enumerates it.
+         *
+         * Leaving `APPROVED` is strictly the safe direction. `ORIGINAL_TRASHED`
+         * is reachable *only* from `APPROVED`, so moving out of it removes the
+         * asset from batch 2 entirely until it has been graded and approved
+         * again — the guard cannot be skipped by going backwards.
+         */
+        LifecycleState.APPROVED to setOf(
+            LifecycleState.ORIGINAL_TRASHED,
+            LifecycleState.QUEUED_FOR_GRADE,
+        ),
         LifecycleState.REJECTED to setOf(
             LifecycleState.QUEUED_FOR_GRADE,
             LifecycleState.DO_NOT_GRADE,

@@ -104,6 +104,19 @@ data class EditJob(
     val processingMs: Long,
     val state: JobState,
 
+    /**
+     * When this job was created. Distinct from [processingMs], which is how
+     * *long* the grade took.
+     *
+     * An asset accumulates a job per grade, and §12's requeue path means a
+     * second one is normal rather than exotic. "The latest job for this asset"
+     * used to be resolved by ordering on `processingMs`, which returns the
+     * slowest grade, not the newest — so after a regrade the approval check
+     * could read a superseded job, including its `approvedAt`, and treat a
+     * stale approval as consent for a grade the user has never seen.
+     */
+    val createdAt: Long = 0L,
+
     // Review & approval — §9
     val approvedAt: Long?,
     val rejectedAt: Long?,

@@ -3,6 +3,43 @@
 All versions are sideload-only builds signed with the same key, so every one
 installs over the last as an update (see [dist/](dist/)).
 
+## 0.2.2
+
+The first CI run of the new instrumented suite found two real defects in the
+approve-and-trash path. Both were invisible to every existing test.
+
+### Fixed
+
+- **§12's recovery path was dead code.** When an approved asset's export failed
+  verification — it stopped decoding, or came out the wrong size —
+  `buildApprovedOriginalsRequest` calls `requeueForGrade` to put it back in the
+  grading queue. But the lifecycle table listed `ORIGINAL_TRASHED` as the *only*
+  exit from `APPROVED`, so that call returned false and did nothing. The asset
+  sat approved with a broken export forever: never regraded, never trashed,
+  re-refused on every subsequent batch. `APPROVED → QUEUED_FOR_GRADE` is now
+  legal, which is also the safe direction — `ORIGINAL_TRASHED` is reachable only
+  from `APPROVED`, so leaving that state removes the asset from batch 2 until it
+  has been graded and approved again.
+- **"The latest job for this asset" meant the slowest one.** `latestForAsset`
+  ordered by `processingMs`, which is how *long* a grade took, not when it ran.
+  `ApprovalGuard` reads that job's `approvedAt` as §9.3 invariant 5, so once an
+  asset carried more than one job — which the fix above makes routine — a slow,
+  approved, superseded grade could authorise trashing an original whose current
+  grade the user had never seen. `EditJob` gains `createdAt` (schema v3,
+  migration included) and the query orders on it.
+
+### Changed
+
+- **The 12MP memory test asserts what ships.** It previously required a
+  full-resolution grade to succeed, which is a claim about the device rather
+  than the code, and it OOMed on the CI emulator. §12's answer to a large frame
+  is to catch the OOM and retry at half resolution, so that is what is now
+  asserted: the grade completes at full or at 2048px, and the log says which. A
+  device where even the reduced path fails is a real failure and still fails.
+- The instrumented test APK declares `largeHeap`, matching the app. Without it
+  the tests ran on a 192MB heap — a configuration nothing ships — and a single
+  144MB frame could not fit.
+
 ## 0.2.1
 
 ### Fixed
