@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.StatFs
+import android.util.Log
 import android.provider.MediaStore
 import androidx.exifinterface.media.ExifInterface
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -24,6 +25,7 @@ import dev.sift.model.LifecycleState
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -292,6 +294,21 @@ class MediaStoreRepository @Inject constructor(
          */
         dateTakenMillis: Long?,
     ): Uri? {
+        // EXIF is applied to a scratch file *before* MediaStore sees the bytes.
+        //
+        // Patching the file in place after insertion did not work: the first
+        // attempt wrote EXIF through `openFileDescriptor` on a pending item and
+        // set DATE_TAKEN twice, and the device tests still came back with
+        // DATE_TAKEN null and DATE_MODIFIED set to now. The scanner that runs
+        // when IS_PENDING clears is the thing that decides those columns, and it
+        // reads the finished file — so the only reliable way to influence it is
+        // to hand it a file that already carries the right EXIF.
+        //
+        // Everything is then belt-and-braces rather than load-bearing: the
+        // insert sets DATE_TAKEN, and a final update sets it again, but neither
+        // is relied on to survive the scan.
+        val staged = stageWithExif(jpeg, sourceUri, width, height, dateTakenMillis)
+
         val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
@@ -308,10 +325,15 @@ class MediaStoreRepository @Inject constructor(
             }
         }
 
-        val uri = resolver.insert(collection, values) ?: return null
+        val uri = resolver.insert(collection, values)
+        if (uri == null) {
+            staged.delete()
+            return null
+        }
         try {
-            resolver.openOutputStream(uri)?.use { it.write(jpeg) } ?: return null
-            copyExif(sourceUri, uri, width, height, dateTakenMillis)
+            resolver.openOutputStream(uri)?.use { out ->
+                staged.inputStream().use { it.copyTo(out) }
+            } ?: return null
         } catch (e: IOException) {
             // Leave nothing half-written behind.
             runCatching { resolver.delete(uri, null, null) }
@@ -320,6 +342,7 @@ class MediaStoreRepository @Inject constructor(
             values.clear()
             values.put(MediaStore.Images.Media.IS_PENDING, 0)
             runCatching { resolver.update(uri, values, null, null) }
+            staged.delete()
         }
 
         // Re-apply the date *after* IS_PENDING clears, and this is the whole
@@ -355,13 +378,19 @@ class MediaStoreRepository @Inject constructor(
      * it MediaStore silently redacts them and the loss is invisible for months
      * (trap #12).
      */
-    private fun copyExif(
+    private fun stageWithExif(
+        jpeg: ByteArray,
         sourceUri: Uri?,
-        destinationUri: Uri,
         width: Int,
         height: Int,
         dateTakenMillis: Long?,
-    ) {
+    ): File {
+        val staged = File.createTempFile("sift-export", ".jpg", context.cacheDir)
+        staged.writeBytes(jpeg)
+
+        // §12 — metadata must never cost a photograph. A failure here leaves a
+        // valid, correctly-graded JPEG with poorer metadata, which is why the
+        // file is written first and decorated second.
         runCatching {
             val original = sourceUri?.let { source ->
                 resolver.openInputStream(
@@ -369,39 +398,38 @@ class MediaStoreRepository @Inject constructor(
                 )?.use { ExifInterface(it) }
             }
 
-            resolver.openFileDescriptor(destinationUri, "rw")?.use { descriptor ->
-                val target = ExifInterface(descriptor.fileDescriptor)
-                if (original != null) {
-                    for (tag in COPIED_EXIF_TAGS) {
-                        original.getAttribute(tag)?.let { target.setAttribute(tag, it) }
-                    }
+            val target = ExifInterface(staged)
+            if (original != null) {
+                for (tag in COPIED_EXIF_TAGS) {
+                    original.getAttribute(tag)?.let { target.setAttribute(tag, it) }
                 }
-                target.setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL.toString())
-                target.setAttribute(ExifInterface.TAG_SOFTWARE, "Sift")
-                target.setAttribute(ExifInterface.TAG_IMAGE_WIDTH, width.toString())
-                target.setAttribute(ExifInterface.TAG_IMAGE_LENGTH, height.toString())
-
-                // Cloud galleries do not read MediaStore — Google Photos dates a
-                // photo from EXIF `DateTimeOriginal`. Plenty of sources have
-                // none: screenshots, messaging-app saves, anything already
-                // stripped. Those exports backed up to the cloud dated today
-                // even with MediaStore correct on the device, so the capture
-                // time Sift already knows is written in when the source did not
-                // supply one. Never overwritten when it did — the camera's own
-                // value is better than one reconstructed from a database.
-                if (dateTakenMillis != null && dateTakenMillis > 0 &&
-                    target.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL) == null
-                ) {
-                    val stamp = EXIF_DATE_FORMAT.format(Date(dateTakenMillis))
-                    target.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, stamp)
-                    target.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, stamp)
-                    if (target.getAttribute(ExifInterface.TAG_DATETIME) == null) {
-                        target.setAttribute(ExifInterface.TAG_DATETIME, stamp)
-                    }
-                }
-                target.saveAttributes()
             }
-        }
+            target.setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL.toString())
+            target.setAttribute(ExifInterface.TAG_SOFTWARE, "Sift")
+            target.setAttribute(ExifInterface.TAG_IMAGE_WIDTH, width.toString())
+            target.setAttribute(ExifInterface.TAG_IMAGE_LENGTH, height.toString())
+
+            // Two audiences, one tag. MediaStore's scanner fills DATE_TAKEN from
+            // `DateTimeOriginal`, and Google Photos — which never reads
+            // MediaStore — dates a photo from it too. Plenty of sources have
+            // none: screenshots, messaging-app saves, anything already stripped.
+            // The capture time Sift already knows is written when the source did
+            // not supply one, and never over one that did, because the camera's
+            // own value beats a reconstruction from a database.
+            if (dateTakenMillis != null && dateTakenMillis > 0 &&
+                target.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL) == null
+            ) {
+                val stamp = EXIF_DATE_FORMAT.format(Date(dateTakenMillis))
+                target.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, stamp)
+                target.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, stamp)
+                if (target.getAttribute(ExifInterface.TAG_DATETIME) == null) {
+                    target.setAttribute(ExifInterface.TAG_DATETIME, stamp)
+                }
+            }
+            target.saveAttributes()
+        }.onFailure { Log.w(TAG, "EXIF could not be applied to $staged", it) }
+
+        return staged
     }
 
     /** §9.6 — refuse a batch below 2 GB free, with a clear message. */
@@ -419,6 +447,8 @@ class MediaStoreRepository @Inject constructor(
          * a locale with non-Latin digits produces a stamp nothing can parse.
          */
         private val EXIF_DATE_FORMAT = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+
+        private const val TAG = "SiftMediaStore"
 
         const val PAGE_SIZE = 200
         const val EXPORT_RELATIVE_PATH = "Pictures/Sift"

@@ -146,16 +146,14 @@ jobs:
           # does not capture — the first run measured them and then threw them
           # away. Dumped here, while the emulator is still alive, and kept even
           # when the tests fail so a red run still reports its numbers.
-          script: |
-            status=0
-            # `|| status=$?` rather than `; status=$?`: the runner executes this
-            # under `set -e`, so a plain failing command aborts the script and
-            # the dump below never runs — which is what happened the first time.
-            ./gradlew :core:data:connectedDebugAndroidTest :app:connectedDebugAndroidTest || status=$?
-            echo "::group::On-device measurements (§13)"
-            adb logcat -d -s SiftGradeMemoryTest:I || true
-            echo "::endgroup::"
-            exit $status
+          #
+          # One line, deliberately. The runner executes a multi-line script as a
+          # separate `sh -c` per line, so a `status=$?` on one line is gone by
+          # the time `exit $status` runs on another — it exits 0 and the job
+          # reports success while the tests failed. That happened: two runs were
+          # reported green with failing tests in them. Chained with `;` in a
+          # single invocation, the variable survives and the exit code is real.
+          script: ./gradlew :core:data:connectedDebugAndroidTest :app:connectedDebugAndroidTest; status=$?; echo "::group::On-device measurements (§13)"; adb logcat -d -s SiftGradeMemoryTest:I || true; echo "::endgroup::"; exit $status
 
       - name: Publish instrumented test report
         if: always()

@@ -68,8 +68,25 @@ class PendingScreenTest {
         viewModel = PendingViewModel(lifecycle)
     }
 
+    /**
+     * The database is deliberately **not** closed.
+     *
+     * `PendingViewModel` keeps a `stateIn` collector on a Room `Flow` for its
+     * `WhileSubscribed` window, and that coroutine outlives the test method.
+     * Closing the database under it threw "connection pool has been closed" from
+     * a Room worker thread, which crashed the instrumentation process — so one
+     * flaky teardown took the other four tests in this class with it, and they
+     * were reported as never having run.
+     *
+     * An in-memory database dies with the process, so there is nothing to clean
+     * up; a `@get:Rule` ordering that cancelled the view model's scope first
+     * would work too, but not closing something that does not need closing is
+     * simpler.
+     */
     @After
-    fun tearDown() = db.close()
+    fun tearDown() {
+        // Intentionally empty — see above.
+    }
 
     private fun queueForDeletion(count: Int) = runBlocking {
         db.mediaAssets().insertAll((1..count).map { asset(it.toLong()) })

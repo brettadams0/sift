@@ -3,6 +3,40 @@
 All versions are sideload-only builds signed with the same key, so every one
 installs over the last as an update (see [dist/](dist/)).
 
+## 0.2.6
+
+CI had been reporting green while tests failed. Fixing that surfaced three real
+failures, including that 0.2.4's export-date fix did not work.
+
+### Fixed
+
+- **The instrumented job passed with failing tests in it.** The emulator runner
+  executes a multi-line `script:` as a separate `sh -c` per line, so the
+  `status=$?` I added in 0.2.3 was gone by the time `exit $status` ran on the
+  next line — it exited 0 and the job reported success. Two runs were announced
+  as green with failures in them, including one reported to the user as such.
+  The script is now a single chained invocation, so the exit code is real.
+- **Exports were still dated today.** 0.2.4 wrote `DATE_TAKEN` at insert *and*
+  again after `IS_PENDING` cleared, and patched EXIF through a file descriptor
+  on the pending item. The device test came back with `DATE_TAKEN` null and
+  `DATE_MODIFIED` set to now, so none of it survived. The scanner that runs when
+  `IS_PENDING` clears reads the finished file and decides those columns itself —
+  the only reliable way to influence it is to hand it a file that already
+  carries the right EXIF. The JPEG is now staged to a scratch file, decorated
+  there, and streamed in complete. The two `DATE_TAKEN` writes remain as
+  belt-and-braces rather than as the mechanism.
+- **A test teardown crashed the instrumentation process.** `PendingScreenTest`
+  closed its in-memory database while `PendingViewModel`'s `stateIn` collector
+  was still reading it, which threw from a Room worker thread and took the other
+  four tests in the class down with it — they were reported as never having run.
+  An in-memory database dies with the process; there was nothing to close.
+
+### Confirmed on device
+
+- **The rotation fix is correct.** `aRotatedSourceDecodesUprightExactlyOnce`
+  passed on API 30 and 35: `ImageDecoder` does apply EXIF orientation, so
+  removing the second bake was right.
+
 ## 0.2.5
 
 **The grading fix.** Graded photos were coming out worse than the originals, and
