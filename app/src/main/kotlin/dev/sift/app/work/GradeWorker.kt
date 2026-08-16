@@ -105,11 +105,18 @@ class GradeWorker @AssistedInject constructor(
 
             outcome.onSuccess { job ->
                 editJobs.upsert(job)
-                lifecycle.transition(
-                    asset.id,
-                    LifecycleState.PENDING_REVIEW,
-                    if (job.fellBackToOriginal) "fell back to original" else "graded",
-                )
+                if (job.fellBackToOriginal) {
+                    // Terminal, not pending: there is no decision for the user to
+                    // make. Parking these in the review queue meant scrolling
+                    // through photos that were never changed, rejecting each one.
+                    lifecycle.transition(
+                        asset.id,
+                        LifecycleState.REJECTED,
+                        "quality gate failed; original kept unchanged",
+                    )
+                } else {
+                    lifecycle.transition(asset.id, LifecycleState.PENDING_REVIEW, "graded")
+                }
             }.onFailure { error ->
                 // One bad frame never fails the batch (§12).
                 editJobs.upsert(failedJob(asset.id, error))
@@ -158,6 +165,31 @@ class GradeWorker @AssistedInject constructor(
                 ditherSeed = assetId,
             ),
         )
+
+        // A fallback means a quality gate rejected the graded result and the
+        // pipeline shipped the source unchanged (§6.12). The "export" would be a
+        // byte-for-byte re-encode of a photo you already have: nothing to review,
+        // nothing to approve, and §9.3 forbids ever trashing its original. Writing
+        // it anyway just fills Pictures/Sift — and the gallery — with duplicates.
+        if (result.fellBackToOriginal) {
+            return EditJob(
+                id = UUID.randomUUID().toString(),
+                sourceAssetId = assetId,
+                outputUri = null,
+                profile = result.profile,
+                profileWasManual = false,
+                derivedParamsJson = json.encodeToString(result.derived),
+                upscaleFactor = 1f,
+                gateResultsJson = json.encodeToString(result.gates),
+                fellBackToOriginal = true,
+                processingMs = result.processingMs,
+                state = JobState.DONE,
+                approvedAt = null,
+                rejectedAt = System.currentTimeMillis(),
+                rejectionReason = null,
+                originalTrashedAt = null,
+            )
+        }
 
         val outputUri = media.writeExport(
             jpeg = result.jpeg,

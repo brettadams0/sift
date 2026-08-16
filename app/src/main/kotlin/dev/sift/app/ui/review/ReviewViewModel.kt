@@ -147,6 +147,7 @@ class ReviewViewModel @Inject constructor(
         val flaggedIds: Set<String> = emptySet(),
         val message: String? = null,
         val pendingReasonForJobId: String? = null,
+        val reasonOfferedForJobId: String? = null,
         val trashRequest: TrashCoordinator.Request? = null,
         val storageReadout: String = "",
         val rejectionHistogram: List<Pair<RejectionReason, Int>> = emptyList(),
@@ -214,19 +215,41 @@ class ReviewViewModel @Inject constructor(
         }
     }
 
-    /** Rejection always asks why — it is the only tuning signal there is (§9.5). */
-    fun beginReject() {
+    /**
+     * Reject and move on. No modal.
+     *
+     * §9.5 is right that the reason is the only tuning signal there is, but a
+     * required dialog after every single reject turns a swipe-speed review into
+     * a form-filling exercise, and a reason given to dismiss a dialog is noise
+     * rather than signal. The reject lands immediately; the reason is offered as
+     * an action on the confirmation, so it is there when you have an opinion and
+     * costs nothing when you do not.
+     */
+    fun rejectCurrent() {
         val item = state.value.current ?: return
-        internal.value = internal.value.copy(pendingReasonForJobId = item.job.id)
+        viewModelScope.launch {
+            lifecycle.reject(item.job, null)
+            internal.value = internal.value.copy(
+                message = "Rejected",
+                // Kept so the snackbar action can attach a reason afterwards.
+                reasonOfferedForJobId = item.job.id,
+            )
+            advance()
+        }
     }
 
+    /** Open the reason picker for the reject that just happened. */
+    fun offerReason() {
+        val jobId = internal.value.reasonOfferedForJobId ?: return
+        internal.value = internal.value.copy(pendingReasonForJobId = jobId)
+    }
+
+    /** Attach a reason after the fact. */
     fun confirmReject(reason: RejectionReason?) {
         val jobId = internal.value.pendingReasonForJobId ?: return
-        val item = state.value.items.firstOrNull { it.job.id == jobId } ?: return
         viewModelScope.launch {
-            lifecycle.reject(item.job, reason)
+            if (reason != null) editJobs.markRejected(jobId, System.currentTimeMillis(), reason)
             internal.value = internal.value.copy(pendingReasonForJobId = null)
-            advance()
         }
     }
 

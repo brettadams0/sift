@@ -163,14 +163,28 @@ interface EditJobDao {
     @Query("SELECT * FROM edit_jobs WHERE state = :state")
     suspend fun inState(state: JobState): List<EditJob>
 
+    /**
+     * Jobs genuinely awaiting a decision.
+     *
+     * `fellBackToOriginal = 0` is not a nicety. A fallback produced no new
+     * image — the gate rejected the grade and the original was kept — so there
+     * is nothing to compare, nothing to approve, and §9.3 forbids trashing its
+     * original in any case. Including them turned Review into a queue of
+     * unchanged photos that had to be rejected one by one.
+     */
     @Query(
         """
         SELECT * FROM edit_jobs
         WHERE state = :done AND approvedAt IS NULL AND rejectedAt IS NULL
+          AND fellBackToOriginal = 0
         ORDER BY processingMs DESC
         """,
     )
     fun pendingReview(done: JobState = JobState.DONE): Flow<List<EditJob>>
+
+    /** §6.12: "surface fallbacks in the UI — a silent fallback teaches you nothing." */
+    @Query("SELECT COUNT(*) FROM edit_jobs WHERE fellBackToOriginal = 1")
+    fun fallbackCount(): Flow<Int>
 
     @Query(
         """

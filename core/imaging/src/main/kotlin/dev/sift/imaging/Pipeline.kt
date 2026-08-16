@@ -271,7 +271,8 @@ object Pipeline {
         var sceneParams: DerivedParams.SceneParams? = null
         when (profile) {
             GradeProfile.PORTRAIT -> {
-                portraitParams = PortraitGrade.apply(upscaled, analysis, settings, damping).params
+                portraitParams =
+                    PortraitGrade.apply(upscaled, analysis, settings, damping, toneScale).params
             }
             GradeProfile.SCENE -> {
                 sceneParams = SceneGrade.apply(upscaled, analysis, settings, toneScale)

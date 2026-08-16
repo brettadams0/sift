@@ -29,7 +29,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -72,8 +74,13 @@ fun ReviewScreen(onBack: () -> Unit, viewModel: ReviewViewModel = hiltViewModel(
         }
     }
     LaunchedEffect(state.message) {
-        state.message?.let {
-            snackbar.showSnackbar(it)
+        state.message?.let { message ->
+            val result = snackbar.showSnackbar(
+                message = message,
+                actionLabel = if (state.reasonOfferedForJobId != null) "Why?" else null,
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) viewModel.offerReason()
             viewModel.consumeMessage()
         }
     }
@@ -153,7 +160,7 @@ fun ReviewScreen(onBack: () -> Unit, viewModel: ReviewViewModel = hiltViewModel(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                OutlinedButton(onClick = viewModel::beginReject, modifier = Modifier.weight(1f)) {
+                OutlinedButton(onClick = viewModel::rejectCurrent, modifier = Modifier.weight(1f)) {
                     Text("Reject")
                 }
                 Button(onClick = viewModel::approveCurrent, modifier = Modifier.weight(1f)) {
@@ -300,12 +307,12 @@ private fun RejectionReasonDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("What was wrong?") },
+        title = { Text("What was wrong? (optional)") },
         text = {
             Column {
                 Text(
-                    "One tap. This is the only signal Sift gets about whether its " +
-                        "targets suit your photographs.",
+                    "Only if you have an opinion. This is the one signal Sift gets " +
+                        "about whether its targets suit your photographs.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
