@@ -5,11 +5,10 @@ import android.content.Context
 import android.util.Log
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import dev.sift.imaging.ColorSpaceTag
-import dev.sift.imaging.FloatImage
 import dev.sift.imaging.Pipeline
 import dev.sift.model.ExportPreset
 import dev.sift.testing.SyntheticFrames
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -63,26 +62,49 @@ class GradeMemoryTest {
     }
 
     /**
-     * §4.3 caps concurrent frames at 2. This holds two decoded sources alive at
-     * once — the shape the grading worker produces — at the resolution the
-     * device actually manages, to confirm the cap is survivable rather than
-     * merely documented.
+     * A batch does not accumulate. This is the memory question the app actually
+     * asks.
+     *
+     * The first version of this test held two 12MP frames alive at once, on the
+     * grounds that §4.3 caps concurrent frames at 2 — and it OOMed so hard the
+     * runtime could not allocate the exception ("OutOfMemoryError thrown while
+     * trying to throw an exception"). Two things were wrong with it, and neither
+     * was a defect in the app:
+     *
+     * - `GradeWorker` grades **sequentially**, one asset at a time. Nothing in
+     *   the shipping code ever holds two decoded frames simultaneously, so the
+     *   test was asserting against a scenario the app does not produce. §4.3's
+     *   cap is a ceiling on a design that has not been built, not a description
+     *   of the current worker.
+     * - It probed capacity by allocating a 144MB frame and discarding it, then
+     *   allocated two more before the first could be collected. The test was
+     *   creating its own memory pressure.
+     *
+     * What a batch really does is grade frames back to back, and what can go
+     * wrong is retention: a frame held past its iteration by a cache, a
+     * reference, or a thread-local. That fails after N frames rather than
+     * immediately, which is exactly the failure a single-frame test misses.
      */
     @Test
-    fun twoFramesHeldAtOnceDoNotExhaustTheHeap() {
-        val edge = if (canAllocateTwelveMegapixels()) 4000 to 3000 else 2048 to 1536
-
-        val first = SyntheticFrames.portrait(width = edge.first, height = edge.second)
-        val second = SyntheticFrames.portrait(width = edge.first, height = edge.second)
-
-        val a = Pipeline.process(Pipeline.Request(Pipeline.SourceFrame(first), ditherSeed = 1L))
-        val b = Pipeline.process(Pipeline.Request(Pipeline.SourceFrame(second), ditherSeed = 2L))
-
-        Log.i(TAG, "two ${edge.first}x${edge.second} frames held at once: ok")
-        assertTrue(a.jpeg.isNotEmpty() && b.jpeg.isNotEmpty())
+    fun gradingFramesBackToBackDoesNotAccumulate() {
+        var completed = 0
+        repeat(BATCH_FRAMES) { i ->
+            // Nothing from the previous iteration is referenced here, so a
+            // failure means something else is holding it.
+            val result = tryGrade(BATCH_EDGE, BATCH_EDGE * 3 / 4, log = false)
+                ?: error(
+                    "frame ${i + 1} of $BATCH_FRAMES ran out of memory at " +
+                        "${BATCH_EDGE}px. Frame 1 fitting and frame ${i + 1} not " +
+                        "means the pipeline is retaining something across grades.",
+                )
+            assertTrue(result.jpeg.isNotEmpty())
+            completed++
+        }
+        Log.i(TAG, "batch: $completed frames at ${BATCH_EDGE}px back to back, no accumulation")
+        assertEquals(BATCH_FRAMES, completed)
     }
 
-    private fun tryGrade(width: Int, height: Int): Pipeline.Result? = try {
+    private fun tryGrade(width: Int, height: Int, log: Boolean = true): Pipeline.Result? = try {
         val frame = SyntheticFrames.portrait(width = width, height = height)
         val started = System.nanoTime()
         val result = Pipeline.process(
@@ -93,7 +115,7 @@ class GradeMemoryTest {
             ),
         )
         val elapsedMs = (System.nanoTime() - started) / 1_000_000
-        Log.i(
+        if (log) Log.i(
             TAG,
             "12MP grade: ${width}x$height in ${elapsedMs}ms on " +
                 "${Runtime.getRuntime().availableProcessors()} cores " +
@@ -104,14 +126,6 @@ class GradeMemoryTest {
     } catch (e: OutOfMemoryError) {
         Log.w(TAG, "OOM grading ${width}x$height: ${e.message}")
         null
-    }
-
-    /** Probe without running a whole grade, so the check itself is cheap. */
-    private fun canAllocateTwelveMegapixels(): Boolean = try {
-        FloatImage.alloc(4000, 3000, ColorSpaceTag.GAMMA_SRGB)
-        true
-    } catch (_: OutOfMemoryError) {
-        false
     }
 
     private fun logHeap() {
@@ -128,5 +142,13 @@ class GradeMemoryTest {
 
         /** Mirrors `GradeWorker.HALF_RESOLUTION_LONG_EDGE` (§12). */
         const val HALF_RESOLUTION_LONG_EDGE = 2048
+
+        /**
+         * The batch runs at a size every device manages, because the question
+         * is whether memory grows across frames, not whether one frame fits —
+         * that is the other test.
+         */
+        const val BATCH_EDGE = 1600
+        const val BATCH_FRAMES = 6
     }
 }

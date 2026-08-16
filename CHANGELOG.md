@@ -3,6 +3,24 @@
 All versions are sideload-only builds signed with the same key, so every one
 installs over the last as an update (see [dist/](dist/)).
 
+## Unreleased
+
+### Changed
+
+- **The memory test was asserting against a scenario the app never creates.**
+  It held two 12MP frames alive at once on the strength of §4.3's cap of two
+  concurrent frames, and OOMed hard enough that the runtime could not allocate
+  the exception. But `GradeWorker` grades sequentially — nothing in the shipping
+  code holds two decoded frames at the same time — and the test's own capacity
+  probe allocated a third 144MB frame and discarded it just before the other
+  two. Neither problem was a defect in the app. It now grades a batch back to
+  back and asserts that memory does not accumulate across frames, which is the
+  failure mode a sequential worker can actually have and one a single-frame test
+  cannot see.
+- CI dumps the instrumented tests' logcat into the job output. The §13 timings
+  were being measured on device and then discarded, because `Log.i` does not
+  reach the Gradle console.
+
 ## 0.2.3
 
 A presentation pass. **No behaviour changed** — every decision, threshold and

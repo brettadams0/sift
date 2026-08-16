@@ -180,9 +180,10 @@ the only part of this app where a bug is not recoverable.
 - **`CancelledDialogTest`** — §14.8 on both batches. Cancelling leaves every
   decision present and uncommitted, the retry commits the same set, and a
   cancelled batch 2 leaves the asset `APPROVED` with `originalTrashedAt` null.
-- **`GradeMemoryTest`** — a 12MP grade completes within the heap, and two frames
-  held at once do not exhaust it (§4.3's limit of 2). It logs the on-device
-  time, which is the only honest answer to §13.
+- **`GradeMemoryTest`** — a 12MP grade completes at full resolution or via
+  §12's half-resolution retry, and a batch graded back to back does not
+  accumulate. It logs the on-device time, which is the only honest answer to
+  §13; CI dumps that logcat into the job output.
 
 They stop at the system dialog: `createTrashRequest` returns a `PendingIntent`
 only the system's confirmation UI can resolve. So the assertions are about which

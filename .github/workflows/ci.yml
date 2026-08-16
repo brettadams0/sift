@@ -142,7 +142,17 @@ jobs:
           # between runs.
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: ./gradlew :core:data:connectedDebugAndroidTest :app:connectedDebugAndroidTest
+          # The §13 timings are written to logcat, which the Gradle console
+          # does not capture — the first run measured them and then threw them
+          # away. Dumped here, while the emulator is still alive, and kept even
+          # when the tests fail so a red run still reports its numbers.
+          script: |
+            ./gradlew :core:data:connectedDebugAndroidTest :app:connectedDebugAndroidTest
+            status=$?
+            echo "::group::On-device measurements (§13)"
+            adb logcat -d -s SiftGradeMemoryTest:I || true
+            echo "::endgroup::"
+            exit $status
 
       - name: Publish instrumented test report
         if: always()
