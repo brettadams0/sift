@@ -1,6 +1,10 @@
 package dev.sift.app.ui.triage
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -15,20 +19,23 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -40,12 +47,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -56,11 +64,29 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import dev.sift.app.ui.theme.SiftSpacing
+import kotlinx.coroutines.launch
 import dev.sift.app.MainActivity
 import dev.sift.model.ContentClass
 import dev.sift.model.Verdict
-import kotlin.math.abs
 import kotlin.math.roundToInt
+
+/**
+ * How far a card must travel before the gesture counts as a decision.
+ *
+ * Unchanged from the value it has always had — named rather than inlined so the
+ * badge alpha and the threshold cannot drift apart.
+ */
+private val SWIPE_THRESHOLD = 120.dp
+
+/** Thumb-sized, so the two most-repeated actions are not 24dp glyphs. */
+private val DECK_ACTION_SIZE = 64.dp
+
+/** Spring back, rather than snap back, when a drag ends short of a decision. */
+private val SETTLE = spring<Float>(
+    dampingRatio = Spring.DampingRatioLowBouncy,
+    stiffness = Spring.StiffnessMediumLow,
+)
 
 /**
  * The swipe deck (§8).
@@ -112,7 +138,7 @@ fun TriageScreen(
                 actions = {
                     if (state.canUndo) {
                         IconButton(onClick = viewModel::undo) {
-                            Icon(Icons.Default.Undo, contentDescription = "Undo last decision")
+                            Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo last decision")
                         }
                     }
                     // Review used to be reachable only from the empty state,
@@ -185,30 +211,95 @@ fun TriageScreen(
                     }
                 }
 
+                // Toss and keep are the two actions taken hundreds of times in
+                // a session, so they get real targets rather than bare 24dp
+                // glyphs — 64dp tonal circles, thumb-reachable at the screen
+                // edges, colour-coded to match the swipe badges. The bin sits
+                // between them at lower visual weight: it is pressed once.
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = { viewModel.decide(Verdict.TOSS) }) {
-                        Icon(Icons.Default.Close, contentDescription = "Toss")
-                    }
+                    DeckAction(
+                        icon = Icons.Default.Close,
+                        label = "Toss",
+                        container = MaterialTheme.colorScheme.errorContainer,
+                        content = MaterialTheme.colorScheme.onErrorContainer,
+                        onClick = { viewModel.decide(Verdict.TOSS) },
+                    )
                     // Goes to the bin rather than straight to the trash dialog:
                     // the last chance to pull one photo back out is worth more
                     // than one saved tap.
                     OutlinedButton(
                         onClick = { if (state.pendingToss > 0) onOpenPending() else viewModel.commit() },
                     ) {
-                        Text(if (state.pendingToss > 0) "Bin ${state.pendingToss}" else "Commit")
+                        Text(
+                            if (state.pendingToss > 0) "Bin ${state.pendingToss}" else "Commit",
+                            maxLines = 1,
+                        )
                     }
-                    IconButton(onClick = { viewModel.decide(Verdict.KEEP) }) {
-                        Icon(Icons.Default.Check, contentDescription = "Keep")
-                    }
+                    DeckAction(
+                        icon = Icons.Default.Check,
+                        label = "Keep",
+                        container = MaterialTheme.colorScheme.primaryContainer,
+                        content = MaterialTheme.colorScheme.onPrimaryContainer,
+                        onClick = { viewModel.decide(Verdict.KEEP) },
+                    )
                 }
             }
         }
     }
 }
 
+/**
+ * One of the two decision buttons under the deck.
+ *
+ * Sized to [DECK_ACTION_SIZE] so the tap target matches the visual target —
+ * a bare `IconButton` draws a 24dp glyph inside a 48dp ripple, which reads as
+ * a small, tentative control for the action this app exists to perform.
+ */
+@Composable
+private fun DeckAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    container: Color,
+    content: Color,
+    onClick: () -> Unit,
+) {
+    FilledIconButton(
+        onClick = onClick,
+        modifier = Modifier.size(DECK_ACTION_SIZE),
+        shape = CircleShape,
+        colors = IconButtonDefaults.filledIconButtonColors(
+            containerColor = container,
+            contentColor = content,
+        ),
+    ) {
+        Icon(icon, contentDescription = label, modifier = Modifier.size(28.dp))
+    }
+}
+
+/**
+ * The swipe card.
+ *
+ * Two things here are about frame rate rather than looks, and both were costing
+ * a recomposition per drag frame:
+ *
+ * - **The offset is never read during composition.** It lives in an
+ *   [Animatable] and every consumer reads it inside a `graphicsLayer` lambda,
+ *   which runs at draw time. Reading a drag offset in the composable body
+ *   recomposes the whole card — and the `AsyncImage` inside it — on every
+ *   pointer event.
+ * - **Both verdict labels are always emitted**, with alpha driven in the same
+ *   deferred way. Emitting one conditionally on `abs(offsetX) > 24f` made the
+ *   card's content structurally change mid-drag, which is the most expensive
+ *   thing a drag can do.
+ *
+ * Release below the threshold now springs back instead of snapping. Above it,
+ * the callback fires immediately as before — the decision is not delayed by an
+ * animation, because the deck advancing is what the user is waiting on.
+ */
 @Composable
 private fun SwipeableCard(
     uri: String,
@@ -216,34 +307,48 @@ private fun SwipeableCard(
     onToss: () -> Unit,
     onSkip: () -> Unit,
 ) {
-    var offsetX by remember(uri) { mutableFloatStateOf(0f) }
-    var offsetY by remember(uri) { mutableFloatStateOf(0f) }
+    val offsetX = remember(uri) { Animatable(0f) }
+    val offsetY = remember(uri) { Animatable(0f) }
     var zoomed by remember(uri) { mutableStateOf(false) }
-    val threshold = with(LocalDensity.current) { 120.dp.toPx() }
+    val threshold = with(LocalDensity.current) { SWIPE_THRESHOLD.toPx() }
+    val scope = rememberCoroutineScope()
+
+    // The new card settles in rather than appearing fully formed where the last
+    // one was thrown from.
+    val entrance = remember(uri) { Animatable(0.94f) }
+    LaunchedEffect(uri) { entrance.animateTo(1f, spring(stiffness = Spring.StiffnessMediumLow)) }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .graphicsLayer {
-                translationX = offsetX
-                translationY = offsetY
-                rotationZ = (offsetX / 40f).coerceIn(-12f, 12f)
+                translationX = offsetX.value
+                translationY = offsetY.value
+                rotationZ = (offsetX.value / 40f).coerceIn(-12f, 12f)
+                scaleX = entrance.value
+                scaleY = entrance.value
             }
             .pointerInput(uri) {
                 detectDragGestures(
                     onDragEnd = {
+                        val x = offsetX.value
+                        val y = offsetY.value
                         when {
-                            offsetX > threshold -> onKeep()
-                            offsetX < -threshold -> onToss()
-                            offsetY < -threshold -> onSkip()
+                            x > threshold -> onKeep()
+                            x < -threshold -> onToss()
+                            y < -threshold -> onSkip()
                         }
-                        offsetX = 0f
-                        offsetY = 0f
+                        scope.launch { offsetX.animateTo(0f, SETTLE) }
+                        scope.launch { offsetY.animateTo(0f, SETTLE) }
+                    },
+                    onDragCancel = {
+                        scope.launch { offsetX.animateTo(0f, SETTLE) }
+                        scope.launch { offsetY.animateTo(0f, SETTLE) }
                     },
                 ) { change, dragAmount ->
                     change.consume()
-                    offsetX += dragAmount.x
-                    offsetY += dragAmount.y
+                    scope.launch { offsetX.snapTo(offsetX.value + dragAmount.x) }
+                    scope.launch { offsetY.snapTo(offsetY.value + dragAmount.y) }
                 }
             }
             .pointerInput(uri) {
@@ -263,23 +368,48 @@ private fun SwipeableCard(
             contentScale = if (zoomed) ContentScale.None else ContentScale.Fit,
         )
 
-        if (abs(offsetX) > 24f) {
-            val keeping = offsetX > 0
-            Text(
-                text = if (keeping) "KEEP" else "TOSS",
-                style = MaterialTheme.typography.headlineMedium,
-                color = if (keeping) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.error
-                },
-                modifier = Modifier
-                    .align(if (keeping) Alignment.TopStart else Alignment.TopEnd)
-                    .padding(24.dp)
-                    .graphicsLayer { alpha = (abs(offsetX) / threshold).coerceIn(0f, 1f) },
-            )
-        }
+        VerdictBadge(
+            label = "KEEP",
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.align(Alignment.TopStart),
+        ) { (offsetX.value / threshold).coerceIn(0f, 1f) }
+
+        VerdictBadge(
+            label = "TOSS",
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.align(Alignment.TopEnd),
+        ) { (-offsetX.value / threshold).coerceIn(0f, 1f) }
     }
+}
+
+/**
+ * A verdict label that reads over any photograph.
+ *
+ * Bare coloured text was legible over a dark frame and invisible over a bright
+ * one. The outlined pill carries its own ground, so the label does not depend on
+ * what is behind it.
+ *
+ * [alpha] is a lambda so the drag offset is sampled at draw time — see
+ * [SwipeableCard].
+ */
+@Composable
+private fun VerdictBadge(
+    label: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+    alpha: () -> Float,
+) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.titleMedium,
+        color = color,
+        modifier = modifier
+            .padding(SiftSpacing.large)
+            .graphicsLayer { this.alpha = alpha() }
+            .border(2.dp, color, MaterialTheme.shapes.small)
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.82f), MaterialTheme.shapes.small)
+            .padding(horizontal = SiftSpacing.medium, vertical = SiftSpacing.tight),
+    )
 }
 
 @Composable

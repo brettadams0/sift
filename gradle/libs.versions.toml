@@ -66,6 +66,8 @@ junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher
 # Instrumented tests (§14.7, §14.8, §14.10). JUnit4, not Jupiter: AndroidJUnitRunner
 # is a JUnit4 runner and the Jupiter-on-Android story is not worth the trouble for
 # a handful of device tests.
+androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
+androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
 androidx-test-junit = { module = "androidx.test.ext:junit", version.ref = "androidx-test-junit" }
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidx-test-runner" }
 androidx-test-core-ktx = { module = "androidx.test:core-ktx", version.ref = "androidx-test-core" }

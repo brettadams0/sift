@@ -41,8 +41,9 @@ android {
         applicationId = "dev.sift"
         minSdk = 30
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.2.2"
+        versionCode = 9
+        versionName = "0.2.3"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -128,6 +129,20 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.androidx.exifinterface)
     implementation(libs.kotlinx.serialization.json)
+
+    // UI tests (§14). The bin's Commit button was wired to a no-op for two
+    // releases with every unit test green, because the defect was in the
+    // wiring between a screen and a view model and nothing looked there.
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.core.ktx)
+    // The screens under test are driven by real view models over a real Room
+    // database, so the test asserts the wiring that actually ships rather than
+    // a fake that cannot be miswired.
+    androidTestImplementation(libs.androidx.room.runtime)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
 /**

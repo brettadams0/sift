@@ -15,7 +15,7 @@ Built to [`SIFT_SPEC.md`](docs/SIFT_SPEC.md) v3.
 
 ## Status
 
-Current build: **0.2.2** (`versionCode` 8). `./gradlew build` is green, and
+Current build: **0.2.3** (`versionCode` 9). `./gradlew build` is green, and
 `./gradlew assembleRelease` produces a **3.0 MB signed APK** that `apksigner`
 verifies as installable across API 30–35.
 Download it from [`dist/`](dist/).
@@ -218,11 +218,11 @@ device, which is the argument for this suite existing.
   [performance](#performance). The instrumented suite now logs the on-device
   figure, so the number exists as soon as CI runs — it is just not yet one this
   README can quote from memory.
-- **No UI-level instrumented tests.** The approve-and-trash *logic* is now
-  covered on a real device (below), but nothing drives the actual Compose
-  screens. The Commit button in the bin was wired to a no-op for two releases
-  and every unit test stayed green, because the defect was in the wiring
-  between a screen and a view model and no test looks there.
+- **UI tests cover one screen, not five.** `PendingScreenTest` drives the bin
+  through its real view model and pins the two 0.2.1 defects, but the deck,
+  review, grid and settings screens have no UI coverage. The bin got tests
+  because that is where a wiring bug shipped; the others are equally exposed to
+  the same class of defect.
 - **§14.4 router accuracy, §14.5 clustering precision/recall** need hand-labelled
   real photographs; the synthetic fixtures show the mechanisms work, not that the
   thresholds are right for your library.
@@ -345,13 +345,10 @@ And one added here:
    "targeting a consistent apparent sharpness", which requires a target to aim
    at. The current value is defensible, not measured. Same treatment as the
    detail blend: tune once against real photographs, then commit it.
-5. **UI-level instrumented tests.** §14.7, §14.8 and §14.10 are now covered on
-   an emulator, but nothing drives the Compose screens. That is where the last
-   two user-visible bugs actually lived: the bin's Commit button was wired to a
-   no-op for two releases with every test green, because the defect was in the
-   wiring between a screen and a view model and no test looks there. A Compose
-   test that presses Commit and asserts a trash request was built would have
-   caught it on the first run.
+5. **UI tests for the remaining screens.** The bin now has them, and they pin
+   the exact defect that shipped. The deck, review, grid and settings screens do
+   not, and they are exposed to the same class of bug: a callback wired to the
+   wrong thing, which no view-model test can see.
 
 ---
 

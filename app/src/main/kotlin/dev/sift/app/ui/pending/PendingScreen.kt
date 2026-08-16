@@ -1,9 +1,10 @@
 package dev.sift.app.ui.pending
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,11 +14,12 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -28,6 +30,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -36,6 +40,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import dev.sift.app.ui.theme.SiftSpacing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.sift.data.db.MediaAsset
 import dev.sift.data.media.LifecycleRepository
@@ -92,7 +97,7 @@ fun PendingScreen(
                 title = { Text("${pending.size} to delete") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -137,29 +142,52 @@ fun PendingScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 120.dp),
+                columns = GridCells.Adaptive(minSize = 108.dp),
+                contentPadding = PaddingValues(
+                    start = SiftSpacing.medium,
+                    end = SiftSpacing.medium,
+                    bottom = SiftSpacing.xlarge,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(SiftSpacing.small),
+                verticalArrangement = Arrangement.spacedBy(SiftSpacing.small),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 items(pending, key = { it.id }) { asset ->
-                    Box(modifier = Modifier.padding(2.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .animateItem()
+                            .clip(MaterialTheme.shapes.medium)
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                    ) {
                         AsyncImage(
                             model = asset.uri,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(1f)
+                                // Everything here is on its way to the bin, so
+                                // it is shown held back rather than presented.
+                                // The rescue button then reads as the one bright
+                                // thing in the cell.
+                                .graphicsLayer { alpha = 0.72f },
                         )
-                        Row(
-                            modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
+                        FilledIconButton(
+                            onClick = { viewModel.rescue(asset.id) },
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(SiftSpacing.small)
+                                .size(36.dp),
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            ),
                         ) {
-                            FilledIconButton(
-                                onClick = { viewModel.rescue(asset.id) },
-                                modifier = Modifier.size(36.dp),
-                            ) {
-                                Icon(
-                                    Icons.Default.Undo,
-                                    contentDescription = "Keep this one after all",
-                                )
-                            }
+                            Icon(
+                                Icons.AutoMirrored.Filled.Undo,
+                                contentDescription = "Keep this one after all",
+                                modifier = Modifier.size(20.dp),
+                            )
                         }
                     }
                 }

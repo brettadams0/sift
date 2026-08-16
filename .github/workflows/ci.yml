@@ -142,12 +142,14 @@ jobs:
           # between runs.
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: ./gradlew :core:data:connectedDebugAndroidTest
+          script: ./gradlew :core:data:connectedDebugAndroidTest :app:connectedDebugAndroidTest
 
       - name: Publish instrumented test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: instrumented-test-results-api${{ matrix.api-level }}
-          path: core/data/build/reports/androidTests/connected
+          path: |
+            core/data/build/reports/androidTests/connected
+            app/build/reports/androidTests/connected
           if-no-files-found: ignore

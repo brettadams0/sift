@@ -3,6 +3,54 @@
 All versions are sideload-only builds signed with the same key, so every one
 installs over the last as an update (see [dist/](dist/)).
 
+## 0.2.3
+
+A presentation pass. **No behaviour changed** — every decision, threshold and
+state transition is byte-for-byte what 0.2.2 did. What changed is how it feels
+and how fast it draws.
+
+### Performance
+
+- **The swipe deck no longer recomposes on every drag frame.** The card's offset
+  was read during composition, so each pointer event recomposed the card *and*
+  the full-size `AsyncImage` inside it. It now lives in an `Animatable` read only
+  inside `graphicsLayer` lambdas, which run at draw time. The verdict labels are
+  always emitted rather than appearing at a threshold, so the card's content no
+  longer changes structurally mid-drag.
+- **Images are cached properly.** A configured Coil loader: a memory cache at a
+  quarter of the heap, a 96MB disk cache, and crossfade. Swiping back a photo,
+  or toggling before/after in review, previously meant a fresh decode every time.
+
+### Look and feel
+
+- Releasing a drag short of the threshold springs back instead of snapping, and
+  a new card settles in rather than appearing where the last one was thrown from.
+- Verdict labels are outlined pills. As bare coloured text they were legible over
+  a dark frame and invisible over a bright one.
+- Toss and keep are 64dp tonal circles colour-matched to the swipe badges. They
+  were 24dp glyphs — the two actions taken hundreds of times a session had the
+  smallest targets on screen.
+- The review screen's three identical button rows now have a hierarchy: the
+  verdict for the current photo stays filled and full width, recovery and bulk
+  actions drop to text weight behind a divider.
+- The bin's thumbnails are rounded, spaced, and dimmed so the rescue button is
+  the bright thing in each cell; removals animate out.
+- Real typography and shape scales, and one shared spacing scale instead of each
+  screen inventing its own.
+- **The launch flash is gone.** The splash theme hardcoded the dark background,
+  so a light-themed phone showed a black frame before the first Compose frame.
+  Now day/night with matching system bars.
+- Back and undo icons are auto-mirrored, so they point the right way in RTL.
+
+### Tested
+
+- `PendingScreenTest` — the first UI-level tests in the project, driving the real
+  screen over the real view model and an in-memory database. They pin the two
+  0.2.1 bugs directly: pressing Delete reaches the commit callback, and the label
+  fits on one line. Both were wrong at once while every unit test stayed green,
+  because the defect was in the wiring between a screen and a view model.
+- The app's UI tests run alongside the `:core:data` suite on API 30 and 35 in CI.
+
 ## 0.2.2
 
 The first CI run of the new instrumented suite found two real defects in the

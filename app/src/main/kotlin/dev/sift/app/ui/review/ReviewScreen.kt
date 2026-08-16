@@ -13,15 +13,17 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,8 +52,12 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import dev.sift.app.ui.theme.SiftSpacing
 import dev.sift.model.RegradeAction
 import dev.sift.model.RejectionReason
+
+/** Tall enough that Approve/Reject are not a mis-tap away from each other. */
+private val BUTTON_HEIGHT = 52.dp
 
 /**
  * Review and approval UI (§9.4).
@@ -99,7 +105,7 @@ fun ReviewScreen(onBack: () -> Unit, viewModel: ReviewViewModel = hiltViewModel(
                 title = { Text("Review ${state.progressLabel}") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -140,10 +146,18 @@ fun ReviewScreen(onBack: () -> Unit, viewModel: ReviewViewModel = hiltViewModel(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
 
+            // The label used to sit flush under the frame with the same weight
+            // as everything else, so which image you were looking at was the
+            // least legible thing on a screen whose whole job is that question.
             Text(
-                if (state.comparing) "Original" else "Graded — hold the image to compare",
+                if (state.comparing) "ORIGINAL" else "GRADED — hold to compare",
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (state.comparing) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
+                modifier = Modifier.align(Alignment.CenterHorizontally),
             )
 
             VerdictStrip(item)
@@ -156,14 +170,25 @@ fun ReviewScreen(onBack: () -> Unit, viewModel: ReviewViewModel = hiltViewModel(
                 )
             }
 
+            // Three rows of same-weight buttons read as one undifferentiated
+            // wall. The verdict for *this* photo is the only thing that has to
+            // be reachable without thinking, so it stays full width and filled;
+            // the recovery actions and the bulk actions drop to text weight
+            // behind a divider.
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(SiftSpacing.small),
             ) {
-                OutlinedButton(onClick = viewModel::rejectCurrent, modifier = Modifier.weight(1f)) {
+                OutlinedButton(
+                    onClick = viewModel::rejectCurrent,
+                    modifier = Modifier.weight(1f).height(BUTTON_HEIGHT),
+                ) {
                     Text("Reject")
                 }
-                Button(onClick = viewModel::approveCurrent, modifier = Modifier.weight(1f)) {
+                Button(
+                    onClick = viewModel::approveCurrent,
+                    modifier = Modifier.weight(1f).height(BUTTON_HEIGHT),
+                ) {
                     Text("Approve")
                 }
             }
@@ -172,7 +197,8 @@ fun ReviewScreen(onBack: () -> Unit, viewModel: ReviewViewModel = hiltViewModel(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(SiftSpacing.small),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(onClick = { viewModel.regrade(RegradeAction.OTHER_PROFILE) }) {
                     Text("Other profile")
@@ -185,20 +211,28 @@ fun ReviewScreen(onBack: () -> Unit, viewModel: ReviewViewModel = hiltViewModel(
                 }
             }
 
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(SiftSpacing.small),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                OutlinedButton(onClick = viewModel::approveAllUnflagged, modifier = Modifier.weight(1f)) {
-                    Text("Approve all")
+                TextButton(onClick = viewModel::approveAllUnflagged, modifier = Modifier.weight(1f)) {
+                    Text("Approve all", maxLines = 1)
                 }
-                OutlinedButton(onClick = viewModel::trashApprovedOriginals, modifier = Modifier.weight(1f)) {
-                    Text("Trash originals")
+                TextButton(onClick = viewModel::trashApprovedOriginals, modifier = Modifier.weight(1f)) {
+                    Text("Trash originals", maxLines = 1)
                 }
             }
 
             if (state.storageReadout.isNotEmpty()) {
-                Text(state.storageReadout, style = MaterialTheme.typography.labelMedium)
+                Text(
+                    state.storageReadout,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                )
             }
         }
     }

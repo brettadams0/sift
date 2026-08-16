@@ -4,10 +4,18 @@
       A bare splash theme only. All real styling lives in Compose
       (ui/theme/Theme.kt), deliberately neutral so the UI never shifts how a
       photograph's colour reads.
+
+      These values must track the Compose palette, because this theme is what is
+      on screen between process start and the first Compose frame. Hardcoding
+      the dark background here meant a black flash on every cold launch on a
+      light-themed phone, and a status bar that stayed dark behind a light UI.
+      `values-night/` carries the dark half.
     -->
-    <style name="Theme.Sift" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#121314</item>
-        <item name="android:statusBarColor">#121314</item>
-        <item name="android:navigationBarColor">#121314</item>
+    <style name="Theme.Sift" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/sift_window_background</item>
+        <item name="android:statusBarColor">@color/sift_window_background</item>
+        <item name="android:navigationBarColor">@color/sift_window_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
     </style>
 </resources>

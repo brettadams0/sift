@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The dark half of the splash theme. Only the system-bar icon polarity
+      differs; the background colour comes from values-night/colors.xml.
+    -->
+    <style name="Theme.Sift" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/sift_window_background</item>
+        <item name="android:statusBarColor">@color/sift_window_background</item>
+        <item name="android:navigationBarColor">@color/sift_window_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

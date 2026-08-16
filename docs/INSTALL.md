@@ -10,7 +10,7 @@ Play distribution makes painful, and there is nobody to distribute it to.
 
 Open this link in the phone's browser and tap download:
 
-**https://github.com/brettadams0/sift/raw/main/dist/sift-0.2.2-release.apk**
+**https://github.com/brettadams0/sift/raw/main/dist/sift-0.2.3-release.apk**
 
 Or take it from the **Actions** tab of this repo — any green `Android build` run
 carries it as the `sift-release-apk` artifact — or build it yourself with
@@ -19,7 +19,7 @@ carries it as the `sift-release-apk` artifact — or build it yourself with
 If you have `adb`:
 
 ```sh
-adb install -r sift-0.2.2-release.apk
+adb install -r sift-0.2.3-release.apk
 ```
 
 `-r` matters: it reinstalls over an existing copy and **keeps your database**,
