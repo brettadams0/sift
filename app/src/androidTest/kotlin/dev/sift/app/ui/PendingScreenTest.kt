@@ -1,14 +1,14 @@
 package dev.sift.app.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -96,21 +96,35 @@ class PendingScreenTest {
     /**
      * The label was inside an `IconButton` — a fixed 48dp circle sized for a
      * 24dp glyph — so "Commit" wrapped to two lines and the tap target did not
-     * match what was drawn. A wrapped label has the same semantics text as an
-     * unwrapped one, so this asserts the only thing that distinguishes them:
-     * height.
+     * match what was drawn. A wrapped label carries the same semantics text as
+     * an unwrapped one, so the assertion has to reach the layout.
+     *
+     * It asks the text node for its `TextLayoutResult` and counts lines, rather
+     * than comparing a measured height against a constant. The first version did
+     * the latter and was wrong in a way worth recording: semantics merge, so
+     * `onNodeWithText` resolved to the *button*, not the text inside it, and a
+     * Material 3 `TextButton` has a 40dp minimum height. The test was asserting
+     * `40dp <= 32dp` and could never have passed however the label rendered.
+     * `lineCount` has no such ambiguity — one line is one line at any density,
+     * font scale or button spec.
      */
     @Test
     fun theDeleteLabelFitsOnOneLine() {
         queueForDeletion(12)
         setContent()
 
-        // There is no assertHeightIsAtMost, so the bounds are read directly.
-        val bounds = compose.onNodeWithText("Delete 12").getUnclippedBoundsInRoot()
-        val height = bounds.bottom - bounds.top
-        assertTrue(
-            "the label wrapped: $height exceeds a single line ($SINGLE_LINE_MAX)",
-            height <= SINGLE_LINE_MAX,
+        val layouts = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithText("Delete 12", useUnmergedTree = true)
+            .fetchSemanticsNode()
+            .config[SemanticsActions.GetTextLayoutResult]
+            .action
+            ?.invoke(layouts)
+
+        assertTrue("the text node reported no layout at all", layouts.isNotEmpty())
+        assertEquals(
+            "the label wrapped onto ${layouts.first().lineCount} lines",
+            1,
+            layouts.first().lineCount,
         )
     }
 
@@ -184,14 +198,6 @@ class PendingScreenTest {
         seenAt = null,
     )
 
-    private companion object {
-        /**
-         * A single line of `labelLarge` inside a `TextButton`, with room to
-         * spare. Two lines cannot fit under this; the wrapped version was
-         * comfortably above it.
-         */
-        val SINGLE_LINE_MAX = 32.dp
-    }
 }
 
 /** Counting helpers, kept out of the test bodies so the assertions read cleanly. */

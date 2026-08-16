@@ -147,8 +147,11 @@ jobs:
           # away. Dumped here, while the emulator is still alive, and kept even
           # when the tests fail so a red run still reports its numbers.
           script: |
-            ./gradlew :core:data:connectedDebugAndroidTest :app:connectedDebugAndroidTest
-            status=$?
+            status=0
+            # `|| status=$?` rather than `; status=$?`: the runner executes this
+            # under `set -e`, so a plain failing command aborts the script and
+            # the dump below never runs — which is what happened the first time.
+            ./gradlew :core:data:connectedDebugAndroidTest :app:connectedDebugAndroidTest || status=$?
             echo "::group::On-device measurements (§13)"
             adb logcat -d -s SiftGradeMemoryTest:I || true
             echo "::endgroup::"
