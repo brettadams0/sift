@@ -3,6 +3,42 @@
 All versions are sideload-only builds signed with the same key, so every one
 installs over the last as an update (see [dist/](dist/)).
 
+## 0.2.1
+
+### Fixed
+
+- **The Commit button in the bin did nothing.** It was wired to "go back" and
+  nothing else, so with anything queued for deletion the trash dialog was
+  unreachable — which is every time it mattered. The deck and the bin each had
+  their own `TriageViewModel` instance and their own `trashRequest`; the bin's
+  Commit had no way to reach the one the deck was watching. Both screens now
+  share one view model, hoisted above the `NavHost`, and the trash launcher
+  lives there too — one launcher, because `NavHost` composes both screens during
+  a transition and two would fire the same `IntentSender` twice.
+- **That button's label wrapped onto two lines.** It was an `IconButton`, a
+  fixed 48dp circle sized for a 24dp glyph, with text inside it. Now a
+  `TextButton` reading `Delete N`, so the label matches what pressing it does.
+
+### Added
+
+- **Instrumented tests for approve-and-trash** — §14.7, §14.8 and §14.10, the
+  gap the README has been flagging since 0.1.0. §14.10 is the one whose failure
+  mode is permanent photo loss.
+  - Each of §9.3's five invariants is failed *on its own*, with everything else
+    satisfied, against a real `ContentResolver` and real files in MediaStore.
+    Invariant 3 ("the output still decodes") cannot be checked any other way —
+    a fake resolver that always returns a valid bitmap asserts nothing.
+  - A fallback original is never in deletion batch 2 (trap #14), an
+    unverifiable output is requeued rather than dropped, `ORIGINAL_TRASHED` is
+    terminal against every other state, and a replayed result after process
+    death trashes nothing twice.
+  - The two batches never share an asset (trap #16).
+  - A cancelled dialog leaves every decision intact and retryable, on both
+    batches.
+  - A 12MP grade completes within the heap, and logs its time on the device —
+    the only honest answer to §13's budget.
+  - They run on API 30 and 35 emulators in CI on every push.
+
 ## 0.2.0
 
 The first release driven entirely by using the app rather than by reading the

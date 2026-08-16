@@ -22,6 +22,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -56,6 +57,11 @@ import javax.inject.Inject
  *
  * It is reachable from the Commit button, so the last thing between a decision
  * and the trash dialog is a chance to look at what is about to go.
+ *
+ * [onCommit] is wired to the *triage* view model's commit, shared from
+ * `SiftApp` — this screen deliberately owns no deletion logic of its own.
+ * Batch-building and the §9.3 checks live in one place, and a second copy here
+ * would be a second thing to audit.
  */
 @HiltViewModel
 class PendingViewModel @Inject constructor(
@@ -91,7 +97,13 @@ fun PendingScreen(
                 },
                 actions = {
                     if (pending.isNotEmpty()) {
-                        IconButton(onClick = onCommit) { Text("Commit") }
+                        // A TextButton, not an IconButton: IconButton is a fixed
+                        // 48dp circle sized for a 24dp glyph, so a text label
+                        // inside it wraps to "Com/mit" and the tap target does
+                        // not match what you see.
+                        TextButton(onClick = onCommit) {
+                            Text("Delete ${pending.size}", maxLines = 1)
+                        }
                     }
                 },
             )
@@ -118,7 +130,8 @@ fun PendingScreen(
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             Text(
                 "Tap the arrow on any photo to take it back out of the bin. " +
-                    "Nothing here is deleted until you commit.",
+                    "Nothing here goes anywhere until you press Delete, and " +
+                    "then it is the system trash — recoverable for 30 days.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),

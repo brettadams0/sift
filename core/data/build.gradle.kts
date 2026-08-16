@@ -50,5 +50,13 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
 
+    // §14.7, §14.8 and §14.10 need a real device: a real ContentResolver for the
+    // decode check in ApprovalGuard, real MediaStore for the trash request, and a
+    // real heap for the 12MP memory case. None of it can be answered on the JVM.
     androidTestImplementation(libs.androidx.room.testing)
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.core.ktx)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(project(":core:testing"))
 }

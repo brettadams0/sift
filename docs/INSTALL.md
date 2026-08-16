@@ -10,7 +10,7 @@ Play distribution makes painful, and there is nobody to distribute it to.
 
 Open this link in the phone's browser and tap download:
 
-**https://github.com/brettadams0/sift/raw/main/dist/sift-0.2.0-release.apk**
+**https://github.com/brettadams0/sift/raw/main/dist/sift-0.2.1-release.apk**
 
 Or take it from the **Actions** tab of this repo — any green `Android build` run
 carries it as the `sift-release-apk` artifact — or build it yourself with
@@ -19,7 +19,7 @@ carries it as the `sift-release-apk` artifact — or build it yourself with
 If you have `adb`:
 
 ```sh
-adb install -r sift-0.2.0-release.apk
+adb install -r sift-0.2.1-release.apk
 ```
 
 `-r` matters: it reinstalls over an existing copy and **keeps your database**,
@@ -76,14 +76,16 @@ device; the cloud copy is yours to manage (§1).
    sharp. Undo covers the last ten decisions.
 
 3. **Nothing is deleted while you swipe.** Every decision is written to the
-   database and nothing else. Tap **Commit** and all your rejects go into one
-   system trash dialog (§8). Cancel it and every decision is still there — you
-   will not have to re-triage.
+   database and nothing else.
 
-   If you tossed something by accident and only notice later, open **Pending
-   deletions** from the home screen: every queued photo is there as a thumbnail
-   with a ↩ to pull that one back out. Undo covers the last ten decisions in
-   order; this covers any of them, at any time before you commit.
+   Deleting is two taps, deliberately. **Bin *n*** on the deck opens the bin —
+   every photo you tossed, as a thumbnail, with a ↩ on each to pull that one
+   back out. That is the fix for the mistake people actually make: you swipe the
+   wrong way and notice four photos later, by which time undo-in-order would
+   cost you everything after it. **Delete *n*** in the bin is what puts them
+   into a single system trash dialog (§8), and it is the system trash — 30 days
+   to change your mind. Cancel the dialog and every decision is still there, so
+   you never have to re-triage.
 
 4. **Keepers get graded automatically** once you commit, if the battery is above
    30% or you are charging; otherwise it waits until you plug in (§9.2). A

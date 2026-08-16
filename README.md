@@ -15,7 +15,7 @@ Built to [`SIFT_SPEC.md`](docs/SIFT_SPEC.md) v3.
 
 ## Status
 
-Current build: **0.2.0** (`versionCode` 6). `./gradlew build` is green, and
+Current build: **0.2.1** (`versionCode` 7). `./gradlew build` is green, and
 `./gradlew assembleRelease` produces a **3.0 MB signed APK** that `apksigner`
 verifies as installable across API 30–35.
 Download it from [`dist/`](dist/).
@@ -29,7 +29,7 @@ Download it from [`dist/`](dist/).
 | **M4** | Scene grade + router | **Done and tested** |
 | **M5** | Quality gates + fallback | **Done and tested** |
 | **M6** | Export presets, encode, EXIF, settings | **Run on a device**; capture date preserved since 0.1.2 |
-| **M7** | Review UI, lifecycle, deferred original-trashing | **Run on a device**; approve-and-trash still unproven |
+| **M7** | Review UI, lifecycle, deferred original-trashing | **Run on a device**; approve-and-trash covered by §14.10 device tests |
 | **M8** | Upscale | **Deliberately not built** — see below |
 
 **Of 48 tests, 46 pass and 2 are skipped by design** — §14.1 needs your own
@@ -157,6 +157,35 @@ means. The levels endpoints are now solved against the *composed* tone chain
 rather than their own stage, so the curve cannot manufacture crushed shadows or
 new clipping. See `SceneGrade.COMPOSED_BLACK_FLOOR_L`.
 
+### The device tests (§14.7, §14.8, §14.10)
+
+`:core:data` carries an instrumented suite that runs on API 30 and 35 emulators
+in CI. It exists because §14.10's failure mode is permanent photo loss and it is
+the only part of this app where a bug is not recoverable.
+
+- **`ApprovalGuardTest`** — each of §9.3's five invariants fails *on its own*,
+  with every other condition satisfied. The trap #14 case differs from the
+  passing case by a single boolean. It runs against a real `ContentResolver`
+  with real files in MediaStore, because invariant 3 is "the output still
+  decodes, checked now rather than at write time" and a fake resolver that
+  always returns a valid bitmap asserts nothing.
+- **`OriginalRetentionTest`** — a fallback original is never in deletion batch
+  2; an output that stopped decoding is requeued rather than dropped *or*
+  trashed; `ORIGINAL_TRASHED` is terminal against every other state and
+  `APPROVED` is the only way in; a result replayed after process death logs no
+  second transition. Plus trap #16: the two batches are disjoint.
+- **`CancelledDialogTest`** — §14.8 on both batches. Cancelling leaves every
+  decision present and uncommitted, the retry commits the same set, and a
+  cancelled batch 2 leaves the asset `APPROVED` with `originalTrashedAt` null.
+- **`GradeMemoryTest`** — a 12MP grade completes within the heap, and two frames
+  held at once do not exhaust it (§4.3's limit of 2). It logs the on-device
+  time, which is the only honest answer to §13.
+
+They stop at the system dialog: `createTrashRequest` returns a `PendingIntent`
+only the system's confirmation UI can resolve. So the assertions are about which
+asset ids Sift *puts into* a request — the part Sift controls, and the part that
+can be wrong.
+
 ### What is not proven
 
 - **§14.1 golden-image parity is skipped, not passing.** It needs three of your
@@ -166,14 +195,14 @@ new clipping. See `SceneGrade.COMPOSED_BLACK_FLOOR_L`.
   because a green parity test with no fixtures is worse than none on the one gate
   §6.2 calls the only defence against the LAB trap.
 - **§13's 12MP budget is missed on the JVM and unmeasured on a phone.** See
-  [performance](#performance).
-- **The approve-and-trash step has never been exercised end to end.** The rest
-  of the app has now run on hardware, but nothing has yet confirmed that
-  `createTrashRequest` returns what the code expects for approved originals, or
-  that a cancelled dialog leaves state consistent. There are no instrumented
-  tests — §14's device-dependent cases (§14.7 memory, §14.8 cancelled dialog,
-  §14.10 original-retention) are specified and unwritten. §14.10 is the one
-  whose failure mode is permanent photo loss.
+  [performance](#performance). The instrumented suite now logs the on-device
+  figure, so the number exists as soon as CI runs — it is just not yet one this
+  README can quote from memory.
+- **No UI-level instrumented tests.** The approve-and-trash *logic* is now
+  covered on a real device (below), but nothing drives the actual Compose
+  screens. The Commit button in the bin was wired to a no-op for two releases
+  and every unit test stayed green, because the defect was in the wiring
+  between a screen and a view model and no test looks there.
 - **§14.4 router accuracy, §14.5 clustering precision/recall** need hand-labelled
   real photographs; the synthetic fixtures show the mechanisms work, not that the
   thresholds are right for your library.
@@ -296,11 +325,13 @@ And one added here:
    "targeting a consistent apparent sharpness", which requires a target to aim
    at. The current value is defensible, not measured. Same treatment as the
    detail blend: tune once against real photographs, then commit it.
-5. **Instrumented tests.** §14.7, §14.8 and §14.10 all need a device or an
-   emulator. §14.10 is the one that matters — its failure mode is permanent
-   photo loss — and until it exists, the §9.3 invariants are enforced by
-   `ApprovalGuard` and reviewed by eye, not proven. Treat the approve-and-trash
-   step with more suspicion than the rest of the app.
+5. **UI-level instrumented tests.** §14.7, §14.8 and §14.10 are now covered on
+   an emulator, but nothing drives the Compose screens. That is where the last
+   two user-visible bugs actually lived: the bin's Commit button was wired to a
+   no-op for two releases with every test green, because the defect was in the
+   wiring between a screen and a view model and no test looks there. A Compose
+   test that presses Commit and asserts a trash request was built would have
+   caught it on the first run.
 
 ---
 

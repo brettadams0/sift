@@ -91,3 +91,63 @@ jobs:
           name: sift-release-apk
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+  # §14.7, §14.8 and §14.10 need a real Android, and §14.10's failure mode is
+  # permanent photo loss — the one place in this app where a bug is not
+  # recoverable. These ran nowhere until now: no development machine here has
+  # KVM, so the tests were written against the API and never executed. This job
+  # is what makes them mean something.
+  #
+  # API 30 is the floor (`minSdk`, and where `createTrashRequest` arrives) and 35
+  # is the target. Both are run because the storage rules are exactly what moved
+  # between them.
+  instrumented:
+    name: Instrumented tests (API ${{ matrix.api-level }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [30, 35]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # The emulator needs hardware acceleration to finish inside the timeout,
+      # and GitHub's Linux runners expose /dev/kvm only after this.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run instrumented tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: google_apis
+          arch: x86_64
+          # The tests write real files into MediaStore and read them back —
+          # ApprovalGuard's invariant 3 decodes the output — so the image needs
+          # a working media provider, and the device must not persist state
+          # between runs.
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: ./gradlew :core:data:connectedDebugAndroidTest
+
+      - name: Publish instrumented test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instrumented-test-results-api${{ matrix.api-level }}
+          path: core/data/build/reports/androidTests/connected
+          if-no-files-found: ignore

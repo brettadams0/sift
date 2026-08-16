@@ -1,13 +1,16 @@
 package dev.sift.app
 
 import android.Manifest
+import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,6 +30,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -37,6 +43,7 @@ import dev.sift.app.ui.review.ReviewScreen
 import dev.sift.app.ui.settings.SettingsScreen
 import dev.sift.app.ui.theme.SiftTheme
 import dev.sift.app.ui.triage.TriageScreen
+import dev.sift.app.ui.triage.TriageViewModel
 import dev.sift.app.work.IngestWorker
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -191,9 +198,43 @@ private fun PermissionGate(onRequest: () -> Unit) {
     }
 }
 
+/**
+ * The triage view model and the trash launcher both live here, above the
+ * NavHost, because two screens drive one deletion.
+ *
+ * The deck queues decisions and the bin is the last look at them, so Commit can
+ * be pressed from either. Scoping the view model to a single navigation entry
+ * gave each screen its own instance and its own `trashRequest`, and the bin's
+ * Commit could do nothing but navigate — which made deletion unreachable
+ * whenever anything was actually queued, i.e. every time it mattered.
+ *
+ * One launcher, not one per screen: `NavHost` composes both source and
+ * destination during a transition, so two `LaunchedEffect`s watching the same
+ * request would fire the same `IntentSender` twice.
+ */
 @Composable
 private fun SiftApp() {
     val navController = rememberNavController()
+    val triageViewModel: TriageViewModel = hiltViewModel()
+    val triageState by triageViewModel.state.collectAsStateWithLifecycle()
+
+    val trashLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        triageViewModel.onTrashResult(result.resultCode == Activity.RESULT_OK)
+    }
+
+    LaunchedEffect(triageState.trashRequest) {
+        triageState.trashRequest?.let {
+            trashLauncher.launch(IntentSenderRequest.Builder(it.intent.intentSender).build())
+            // The bin has done its job once the system dialog is up; staying
+            // behind it means landing back on a list that is about to be empty.
+            if (navController.currentDestination?.route == SiftNav.PENDING) {
+                navController.popBackStack()
+            }
+        }
+    }
+
     NavHost(navController = navController, startDestination = SiftNav.TRIAGE) {
         composable(SiftNav.TRIAGE) {
             TriageScreen(
@@ -201,12 +242,13 @@ private fun SiftApp() {
                 onOpenGrid = { navController.navigate(SiftNav.GRID) },
                 onOpenSettings = { navController.navigate(SiftNav.SETTINGS) },
                 onOpenPending = { navController.navigate(SiftNav.PENDING) },
+                viewModel = triageViewModel,
             )
         }
         composable(SiftNav.PENDING) {
             PendingScreen(
                 onBack = { navController.popBackStack() },
-                onCommit = { navController.popBackStack() },
+                onCommit = triageViewModel::commit,
             )
         }
         composable(SiftNav.REVIEW) { ReviewScreen(onBack = { navController.popBackStack() }) }

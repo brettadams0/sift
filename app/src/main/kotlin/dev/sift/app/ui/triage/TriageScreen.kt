@@ -1,9 +1,5 @@
 package dev.sift.app.ui.triage
 
-import android.app.Activity
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.IntentSenderRequest
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -86,17 +82,9 @@ fun TriageScreen(
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
 
-    val trashLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartIntentSenderForResult(),
-    ) { result ->
-        viewModel.onTrashResult(result.resultCode == Activity.RESULT_OK)
-    }
-
-    LaunchedEffect(state.trashRequest) {
-        state.trashRequest?.let {
-            trashLauncher.launch(IntentSenderRequest.Builder(it.intent.intentSender).build())
-        }
-    }
+    // The trash launcher lives in SiftApp, above the NavHost: the bin commits
+    // the same batch this screen does, and a second launcher here would fire
+    // the same IntentSender twice during the navigation transition.
 
     LaunchedEffect(state.message) {
         state.message?.let {
