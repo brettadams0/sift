@@ -19,13 +19,15 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.sift.data.db.MediaAsset
 import dev.sift.imaging.ColorSpaceTag
 import dev.sift.imaging.FloatImage
-import dev.sift.imaging.Orientation
 import dev.sift.imaging.SourceMetadata
 import dev.sift.model.LifecycleState
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -195,10 +197,22 @@ class MediaStoreRepository @Inject constructor(
             bitmap
         }
         safe.getPixels(argb, 0, safe.width, 0, 0, safe.width, safe.height)
+        val width = safe.width
+        val height = safe.height
 
-        var image = FloatImage.fromArgb(safe.width, safe.height, argb)
+        // Recycled *before* the float buffer is allocated, not after.
+        //
+        // At 12MP the bitmap is ~48MB, the int array another ~48MB, and the
+        // FloatImage ~144MB. Holding the bitmap across that last allocation put
+        // peak decode at ~240MB against a `largeHeap` ceiling that measured
+        // 512MB on the CI emulator — and a 12MP grade OOMs there, so every
+        // frame falls back to §12's half-resolution retry and quietly ships a
+        // 2048px master. Freeing here costs nothing and takes ~48MB off the
+        // peak; the ARGB array is still live because fromArgb reads it.
         safe.recycle()
         if (safe !== bitmap) bitmap.recycle()
+
+        val image = FloatImage.fromArgb(width, height, argb)
 
         val exif = readExif(uri)
         val orientation = exif?.getAttributeInt(
@@ -206,9 +220,24 @@ class MediaStoreRepository @Inject constructor(
             ExifInterface.ORIENTATION_NORMAL,
         ) ?: ExifInterface.ORIENTATION_NORMAL
 
-        // Already tagged GAMMA_SRGB by fromArgb, and bake() carries the tag
-        // through, so the frame arrives at §6.1 step 3 correctly labelled.
-        image = Orientation.bake(image, orientation)
+        // NOT `Orientation.bake(image, orientation)`.
+        //
+        // `ImageDecoder` already applies EXIF orientation — unlike
+        // `BitmapFactory`, which does not. Baking again rotated every photo
+        // whose camera wrote a non-normal orientation tag a second time: a
+        // portrait shot tagged ROTATE_90 came out on its side, and because the
+        // export is then written with TAG_ORIENTATION = NORMAL, nothing
+        // downstream could undo it. Landscape shots tagged NORMAL were
+        // untouched, which is why it looked intermittent rather than total.
+        //
+        // §6.1 step 2 is still satisfied — the orientation *is* baked into the
+        // pixels before anything measures or crops (trap #2), just by the
+        // decoder rather than by us. `ExportMetadataTest` pins that on a real
+        // device, because it is a platform behaviour rather than one this code
+        // controls.
+        //
+        // [orientation] is still reported so the export can record NORMAL and
+        // callers can reason about the source; it is deliberately not applied.
 
         val hasExposure = exif != null && (
             exif.getAttribute(ExifInterface.TAG_F_NUMBER) != null ||
@@ -282,7 +311,7 @@ class MediaStoreRepository @Inject constructor(
         val uri = resolver.insert(collection, values) ?: return null
         try {
             resolver.openOutputStream(uri)?.use { it.write(jpeg) } ?: return null
-            if (sourceUri != null) copyExif(sourceUri, uri, width, height)
+            copyExif(sourceUri, uri, width, height, dateTakenMillis)
         } catch (e: IOException) {
             // Leave nothing half-written behind.
             runCatching { resolver.delete(uri, null, null) }
@@ -291,6 +320,25 @@ class MediaStoreRepository @Inject constructor(
             values.clear()
             values.put(MediaStore.Images.Media.IS_PENDING, 0)
             runCatching { resolver.update(uri, values, null, null) }
+        }
+
+        // Re-apply the date *after* IS_PENDING clears, and this is the whole
+        // fix rather than belt-and-braces.
+        //
+        // Clearing IS_PENDING makes MediaStore scan the finished file and
+        // re-derive its columns from what is actually on disk — which overwrites
+        // the DATE_TAKEN set at insert time. Exports therefore kept landing at
+        // the top of the gallery dated today even though the value had been
+        // written correctly a moment earlier, because the scan happened after.
+        // Setting it again once the row is settled is the only ordering the
+        // scanner cannot undo.
+        if (dateTakenMillis != null && dateTakenMillis > 0) {
+            val dated = ContentValues().apply {
+                put(MediaStore.Images.Media.DATE_TAKEN, dateTakenMillis)
+                // DATE_MODIFIED is in seconds, not millis.
+                put(MediaStore.Images.Media.DATE_MODIFIED, dateTakenMillis / 1000)
+            }
+            runCatching { resolver.update(uri, dated, null, null) }
         }
         return uri
     }
@@ -307,21 +355,50 @@ class MediaStoreRepository @Inject constructor(
      * it MediaStore silently redacts them and the loss is invisible for months
      * (trap #12).
      */
-    private fun copyExif(sourceUri: Uri, destinationUri: Uri, width: Int, height: Int) {
+    private fun copyExif(
+        sourceUri: Uri?,
+        destinationUri: Uri,
+        width: Int,
+        height: Int,
+        dateTakenMillis: Long?,
+    ) {
         runCatching {
-            val original = resolver.openInputStream(
-                MediaStore.setRequireOriginal(sourceUri),
-            )?.use { ExifInterface(it) } ?: return
+            val original = sourceUri?.let { source ->
+                resolver.openInputStream(
+                    MediaStore.setRequireOriginal(source),
+                )?.use { ExifInterface(it) }
+            }
 
             resolver.openFileDescriptor(destinationUri, "rw")?.use { descriptor ->
                 val target = ExifInterface(descriptor.fileDescriptor)
-                for (tag in COPIED_EXIF_TAGS) {
-                    original.getAttribute(tag)?.let { target.setAttribute(tag, it) }
+                if (original != null) {
+                    for (tag in COPIED_EXIF_TAGS) {
+                        original.getAttribute(tag)?.let { target.setAttribute(tag, it) }
+                    }
                 }
                 target.setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL.toString())
                 target.setAttribute(ExifInterface.TAG_SOFTWARE, "Sift")
                 target.setAttribute(ExifInterface.TAG_IMAGE_WIDTH, width.toString())
                 target.setAttribute(ExifInterface.TAG_IMAGE_LENGTH, height.toString())
+
+                // Cloud galleries do not read MediaStore — Google Photos dates a
+                // photo from EXIF `DateTimeOriginal`. Plenty of sources have
+                // none: screenshots, messaging-app saves, anything already
+                // stripped. Those exports backed up to the cloud dated today
+                // even with MediaStore correct on the device, so the capture
+                // time Sift already knows is written in when the source did not
+                // supply one. Never overwritten when it did — the camera's own
+                // value is better than one reconstructed from a database.
+                if (dateTakenMillis != null && dateTakenMillis > 0 &&
+                    target.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL) == null
+                ) {
+                    val stamp = EXIF_DATE_FORMAT.format(Date(dateTakenMillis))
+                    target.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, stamp)
+                    target.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, stamp)
+                    if (target.getAttribute(ExifInterface.TAG_DATETIME) == null) {
+                        target.setAttribute(ExifInterface.TAG_DATETIME, stamp)
+                    }
+                }
                 target.saveAttributes()
             }
         }
@@ -336,6 +413,13 @@ class MediaStoreRepository @Inject constructor(
     fun hasSpaceForBatch(): Boolean = freeBytes() >= MIN_FREE_BYTES
 
     companion object {
+        /**
+         * EXIF 2.3 §4.6.4 — `yyyy:MM:dd HH:mm:ss`, in local time with no zone.
+         * `Locale.US` because the pattern is a wire format, not a display one:
+         * a locale with non-Latin digits produces a stamp nothing can parse.
+         */
+        private val EXIF_DATE_FORMAT = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+
         const val PAGE_SIZE = 200
         const val EXPORT_RELATIVE_PATH = "Pictures/Sift"
 

@@ -3,9 +3,52 @@
 All versions are sideload-only builds signed with the same key, so every one
 installs over the last as an update (see [dist/](dist/)).
 
-## Unreleased
+## 0.2.4
+
+Two bugs from real use, both in the export path, both invisible to every test
+that existed.
+
+### Fixed
+
+- **Photos came out rotated.** `ImageDecoder` applies EXIF orientation itself —
+  unlike `BitmapFactory`, which does not — and the pipeline was baking the
+  orientation in again on top of it. Every photo whose camera wrote a non-normal
+  tag was rotated twice, and since the export records `TAG_ORIENTATION = NORMAL`
+  nothing downstream could undo it. Shots tagged NORMAL were untouched, which is
+  why it looked intermittent rather than total. §6.1 step 2 is still satisfied —
+  the rotation *is* in the pixels before anything measures or crops (trap #2),
+  it is just the decoder doing it.
+- **Exports landed at the top of the gallery dated today.** `DATE_TAKEN` was
+  being set when the row was inserted, and then silently overwritten: clearing
+  `IS_PENDING` makes MediaStore rescan the finished file and re-derive its
+  columns from disk. The value is now written again after the row settles, which
+  is the one ordering the scanner cannot undo. 0.1.2's fix set the right value
+  at the wrong moment.
+- **And dated today in the cloud, too.** Google Photos does not read MediaStore;
+  it dates a photo from EXIF `DateTimeOriginal`. Sources that have none —
+  screenshots, messaging-app saves, anything already stripped — produced exports
+  that were correct on the device and wrong in the backup. Sift now writes the
+  capture time it already knows when the source did not supply one, and never
+  overwrites one that did.
 
 ### Changed
+
+- **Decode frees the source bitmap before allocating the float buffer.** At 12MP
+  that is a ~48MB bitmap held across a ~144MB allocation, and the CI emulator
+  measured a 512MB `largeHeap` ceiling where a full-resolution grade OOMs — so
+  every large frame was falling back to §12's half-resolution retry and quietly
+  shipping a 2048px master. This takes ~48MB off peak decode. It is a step, not
+  a fix: see the README's performance section.
+
+### Added
+
+- `ExportMetadataTest` — device tests for both bugs. Capture date survives to
+  MediaStore and to EXIF, `DATE_MODIFIED` is in seconds, and a source tagged
+  `ROTATE_90` decodes upright exactly once. The orientation test asserts the
+  contract rather than the mechanism, so it still means something if a future
+  Android changes who applies the rotation.
+
+### Also in this release
 
 - **The memory test was asserting against a scenario the app never creates.**
   It held two 12MP frames alive at once on the strength of §4.3's cap of two

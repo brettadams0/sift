@@ -15,7 +15,7 @@ Built to [`SIFT_SPEC.md`](docs/SIFT_SPEC.md) v3.
 
 ## Status
 
-Current build: **0.2.3** (`versionCode` 9). `./gradlew build` is green, and
+Current build: **0.2.4** (`versionCode` 10). `./gradlew build` is green, and
 `./gradlew assembleRelease` produces a **3.0 MB signed APK** that `apksigner`
 verifies as installable across API 30–35.
 Download it from [`dist/`](dist/).
@@ -215,10 +215,9 @@ device, which is the argument for this suite existing.
   the test turns on. It reports as *skipped* rather than passing vacuously,
   because a green parity test with no fixtures is worse than none on the one gate
   §6.2 calls the only defence against the LAB trap.
-- **§13's 12MP budget is missed on the JVM and unmeasured on a phone.** See
-  [performance](#performance). The instrumented suite now logs the on-device
-  figure, so the number exists as soon as CI runs — it is just not yet one this
-  README can quote from memory.
+- **§13's 12MP budget is missed, and on a 512MB heap the full-resolution grade
+  does not run at all.** See [performance](#performance). Exports on such a
+  device are 2048px masters and nothing tells the user that.
 - **UI tests cover one screen, not five.** `PendingScreenTest` drives the bin
   through its real view model and pins the two 0.2.1 defects, but the deck,
   review, grid and settings screens have no UI coverage. The bin got tests
@@ -285,13 +284,43 @@ Where it came from, in rough order of contribution:
 - **Ingest stopped decoding at full resolution.** The dHash needs 1024px on the
   long edge, and it was decoding 12MP frames to compute a 64-bit number.
 
-The honest caveat: this is a JVM measurement, so it says the pipeline got
-roughly twice as fast and does not say what a phone does. A phone has different
-memory bandwidth, a big.LITTLE core mix and thermal throttling, none of which
-are represented here. §13 says a missed budget means stop and fix; the next
-step is an instrumented run, and closing the remaining gap is likely to need
-either a fixed-point path or NDK/SIMD — which would reopen the OpenCV decision
-above.
+### On a device, the problem is memory before it is time
+
+The instrumented suite now measures this on an emulator, and the result is worse
+than the JVM figure suggested:
+
+```
+heap: standard 192MB, large 512MB, max 512MB
+OOM grading 4000x3000: failed to allocate 48MB with 4.4MB until OOM,
+  target footprint 536870912, growth limit 536870912
+12MP grade: 2048x1536 in 2462ms on 2 cores (§13 budget 2500ms)
+```
+
+**A full 12MP grade does not complete in a 512MB heap.** Not "is slow" — it runs
+out of memory 48MB from the end. So on hardware in that class §12's
+half-resolution retry is not a rare safety net, it is the path every large photo
+takes, and the master that gets written is 2048px rather than 12MP. The app does
+not currently say so, which is the worse half of the problem.
+
+The 2462ms figure is therefore *not* the budget being met: it is a quarter-pixel
+grade on two emulator cores. A real phone has more of both. The shape of the
+finding is what matters — peak footprint, not throughput, is what decides
+whether you get a full-resolution master.
+
+Peak is roughly: a ~48MB decoded bitmap, a ~48MB int buffer, a ~144MB
+`FloatImage`, and a second ~144MB working copy inside the pipeline. 0.2.4 frees
+the bitmap before the float allocation, which takes ~48MB off. That is a step,
+not a fix. The remaining candidates, in order of how much they would buy:
+
+1. **Convert in place instead of copying.** `Pipeline.process` copies the source
+   frame so it can leave the caller's image untouched; the worker never reuses
+   it. Worth ~144MB, at the cost of a mutating contract.
+2. **Tile the per-pixel passes.** Most of §6 is pointwise and already runs
+   row-parallel, so it could run on strips without holding a second full frame.
+3. **Fixed-point or NDK/SIMD**, which reopens the OpenCV decision above.
+
+None of these are done. §13 says a missed budget means stop and fix, and this is
+the honest statement of where that stands.
 
 ---
 
