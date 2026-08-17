@@ -217,7 +217,8 @@ device, which is the argument for this suite existing.
   §6.2 calls the only defence against the LAB trap.
 - **§13's 12MP budget is missed.** A full-resolution 12MP grade does now run in
   a 512MB heap — CI reports `4000x3000 … fellBack=false` on API 30 and 35 — but
-  it takes 12.6s there against a 2.5s budget. See [performance](#performance).
+  it takes 13s or more there against a 2.5s budget. See
+  [performance](#performance).
 - **UI tests cover one screen, not five.** `PendingScreenTest` drives the bin
   through its real view model and pins the two 0.2.1 defects, but the deck,
   review, grid and settings screens have no UI coverage. The bin got tests
@@ -332,8 +333,8 @@ speed.
 **It worked, and the device tests now say so rather than the bench.** The first
 run with a correctly-configured `GradeMemoryTest` reports a 4000x3000 grade
 completing with `fellBack=false` on both API 30 (512MB heap) and API 35 (576MB).
-The budget is a different matter: 12.6s and 21.0s respectively, on two emulated
-cores, against §13's 2.5s. Closing that is a different problem — fixed-point,
+The budget is a different matter: 13-21s across runs, on two emulated cores,
+against §13's 2.5s. Closing that is a different problem — fixed-point,
 tiling, or NDK/SIMD, which reopens the OpenCV decision above.
 
 ---
