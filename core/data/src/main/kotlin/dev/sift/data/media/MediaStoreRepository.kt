@@ -30,6 +30,7 @@ import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -294,19 +295,29 @@ class MediaStoreRepository @Inject constructor(
          */
         dateTakenMillis: Long?,
     ): Uri? {
-        // EXIF is applied to a scratch file *before* MediaStore sees the bytes.
+        // Neither date column is written through the ContentResolver, because a
+        // non-system app cannot write them. Three releases tried: at insert, in
+        // the same update that clears IS_PENDING, and in a separate update after
+        // it. The instrumented run that finally measured it recorded
         //
-        // Patching the file in place after insertion did not work: the first
-        // attempt wrote EXIF through `openFileDescriptor` on a pending item and
-        // set DATE_TAKEN twice, and the device tests still came back with
-        // DATE_TAKEN null and DATE_MODIFIED set to now. The scanner that runs
-        // when IS_PENDING clears is the thing that decides those columns, and it
-        // reads the finished file — so the only reliable way to influence it is
-        // to hand it a file that already carries the right EXIF.
+        //   export date: wanted=1552555613000 updateRows=0 err=null
+        //                readback=datetaken=null date_added=... date_modified=...
         //
-        // Everything is then belt-and-braces rather than load-bearing: the
-        // insert sets DATE_TAKEN, and a final update sets it again, but neither
-        // is relied on to survive the scan.
+        // — zero rows changed and no exception, on both API 30 and 35.
+        // MediaProvider drops DATE_TAKEN and DATE_MODIFIED from an update by a
+        // non-system caller, leaves the values map empty and returns 0. Every
+        // previous fix was writing to a column the provider silently ignores,
+        // which is why each one looked plausible and changed nothing.
+        //
+        // Both columns are *derived*, and the file is the only input:
+        //
+        //   DATE_MODIFIED  <- the file's modification time on disk
+        //   DATE_TAKEN     <- EXIF DateTimeOriginal, but only when the scanner
+        //                     is willing to trust it (see stageWithExif)
+        //
+        // So the whole job is to hand the scanner a file that already says the
+        // right thing, and then let it run. Steps 1 and 3 below are the fix; the
+        // insert carries no dates at all any more.
         val staged = stageWithExif(jpeg, sourceUri, width, height, dateTakenMillis)
 
         val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
@@ -317,12 +328,6 @@ class MediaStoreRepository @Inject constructor(
             put(MediaStore.Images.Media.WIDTH, width)
             put(MediaStore.Images.Media.HEIGHT, height)
             put(MediaStore.Images.Media.IS_PENDING, 1)
-            if (dateTakenMillis != null && dateTakenMillis > 0) {
-                put(MediaStore.Images.Media.DATE_TAKEN, dateTakenMillis)
-                // DATE_MODIFIED is in seconds, not millis. Setting it keeps the
-                // export beside its original under "recently modified" sorts too.
-                put(MediaStore.Images.Media.DATE_MODIFIED, dateTakenMillis / 1000)
-            }
         }
 
         val uri = resolver.insert(collection, values)
@@ -339,52 +344,66 @@ class MediaStoreRepository @Inject constructor(
             runCatching { resolver.delete(uri, null, null) }
             throw e
         } finally {
-            // DATE_TAKEN rides along with the IS_PENDING clear rather than
-            // following it. Clearing the flag is what makes MediaProvider
-            // finalise the row, and values supplied in that same update are
-            // applied as part of it — a separate update afterwards was racing
-            // whatever the finalisation does and losing.
+            staged.delete()
+
+            // Step 2 — backdate the file itself, before the scan reads it.
+            //
+            // Closing the output stream sets the modification time to now, so
+            // this has to happen after the bytes are written and before
+            // IS_PENDING clears. The scan that finalisation triggers then picks
+            // the capture time up as DATE_MODIFIED, which is what every
+            // "recently modified" sort in a file manager or gallery orders by.
+            val backdated = if (dateTakenMillis != null && dateTakenMillis > 0) {
+                backdateFile(uri, dateTakenMillis)
+            } else {
+                "not requested"
+            }
+
+            // Step 3 — clear IS_PENDING, and nothing else. This is what makes
+            // MediaProvider scan the finished file and fill in the row.
             values.clear()
             values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            runCatching { resolver.update(uri, values, null, null) }
+                .onFailure { Log.w(TAG, "export could not be finalised: $uri", it) }
+
+            // Kept from the diagnostic build. It costs one query per export and
+            // it is the only way to see, from a phone or from CI, whether a
+            // graded photo landed in the right place in the gallery — which is
+            // the one thing about this path that four attempts have shown is
+            // not safe to assume from the code.
             if (dateTakenMillis != null && dateTakenMillis > 0) {
-                values.put(MediaStore.Images.Media.DATE_TAKEN, dateTakenMillis)
-                values.put(MediaStore.Images.Media.DATE_MODIFIED, dateTakenMillis / 1000)
+                Log.i(
+                    TAG,
+                    "export date: wanted=$dateTakenMillis backdate=$backdated " +
+                        "readback=${readDateColumns(uri)}",
+                )
             }
-            val finalised = runCatching { resolver.update(uri, values, null, null) }
-            staged.delete()
-            Log.i(TAG, "export finalise: rows=${finalised.getOrNull()} err=${finalised.exceptionOrNull()}")
-        }
-
-        // Re-apply the date *after* IS_PENDING clears, and this is the whole
-        // fix rather than belt-and-braces.
-        //
-        // Clearing IS_PENDING makes MediaStore scan the finished file and
-        // re-derive its columns from what is actually on disk — which overwrites
-        // the DATE_TAKEN set at insert time. Exports therefore kept landing at
-        // the top of the gallery dated today even though the value had been
-        // written correctly a moment earlier, because the scan happened after.
-        // Setting it again once the row is settled is the only ordering the
-        // scanner cannot undo.
-        if (dateTakenMillis != null && dateTakenMillis > 0) {
-            val dated = ContentValues().apply {
-                put(MediaStore.Images.Media.DATE_TAKEN, dateTakenMillis)
-                // DATE_MODIFIED is in seconds, not millis.
-                put(MediaStore.Images.Media.DATE_MODIFIED, dateTakenMillis / 1000)
-            }
-            val rows = runCatching { resolver.update(uri, dated, null, null) }
-
-            // Three attempts at this bug have each been a plausible theory that
-            // turned out to be wrong, so the next one gets facts instead. The
-            // instrumented job dumps this tag's logcat, which makes the actual
-            // behaviour — not a guess about it — visible in the CI output.
-            Log.i(
-                TAG,
-                "export date: wanted=$dateTakenMillis updateRows=${rows.getOrNull()} " +
-                    "err=${rows.exceptionOrNull()} readback=${readDateColumns(uri)}",
-            )
         }
         return uri
     }
+
+    /**
+     * Set an exported file's modification time to the capture time.
+     *
+     * MediaStore has no writable column for this — `DATE_MODIFIED` is read back
+     * off the filesystem — so it has to be done to the file. The path comes from
+     * the row's `DATA` column, which is deprecated for discovery but still the
+     * only way to reach a file the app itself just created, and writing to it is
+     * allowed precisely because Sift owns the row.
+     *
+     * A failure here costs sort position under "date modified" and nothing else:
+     * `DATE_TAKEN` comes from EXIF and is unaffected, so this never fails an
+     * export (§12 — metadata must not cost a photograph). It returns what
+     * happened rather than throwing, so the outcome reaches the log line above.
+     */
+    private fun backdateFile(uri: Uri, dateTakenMillis: Long): String = runCatching {
+        val path = resolver.query(uri, arrayOf(MediaStore.Images.Media.DATA), null, null, null)
+            ?.use { if (it.moveToFirst() && !it.isNull(0)) it.getString(0) else null }
+            ?: return@runCatching "no DATA path"
+        val file = File(path)
+        if (!file.setLastModified(dateTakenMillis)) return@runCatching "refused by filesystem"
+        "ok mtime=${file.lastModified()}"
+    }.getOrElse { "failed: $it" }
 
     /**
      * §2.5 / §6.11 step 4 — copy all EXIF, then override exactly three fields.
@@ -436,20 +455,83 @@ class MediaStoreRepository @Inject constructor(
             // The capture time Sift already knows is written when the source did
             // not supply one, and never over one that did, because the camera's
             // own value beats a reconstruction from a database.
-            if (dateTakenMillis != null && dateTakenMillis > 0 &&
-                target.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL) == null
-            ) {
-                val stamp = EXIF_DATE_FORMAT.format(Date(dateTakenMillis))
-                target.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, stamp)
-                target.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, stamp)
-                if (target.getAttribute(ExifInterface.TAG_DATETIME) == null) {
-                    target.setAttribute(ExifInterface.TAG_DATETIME, stamp)
+            val formatter = SimpleDateFormat(EXIF_DATE_PATTERN, Locale.US)
+            var offset: String? = null
+            val existing = target.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+            if (existing == null) {
+                if (dateTakenMillis != null && dateTakenMillis > 0) {
+                    val stamp = formatter.format(Date(dateTakenMillis))
+                    target.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, stamp)
+                    target.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, stamp)
+                    if (target.getAttribute(ExifInterface.TAG_DATETIME) == null) {
+                        target.setAttribute(ExifInterface.TAG_DATETIME, stamp)
+                    }
+                    // The stamp was formatted in the device's current zone, so
+                    // that zone is the one to declare.
+                    offset = formatUtcOffset(TimeZone.getDefault().getOffset(dateTakenMillis))
+                }
+            } else if (target.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL) == null) {
+                offset = dateTakenMillis
+                    ?.takeIf { it > 0 }
+                    ?.let { deriveUtcOffset(existing, it) }
+            }
+
+            // Why the offset tag is the actual fix.
+            //
+            // `DateTimeOriginal` is a wall clock with no zone, so on its own it
+            // does not name an instant. MediaProvider takes it at face value
+            // only when an offset tag says which zone it is in; otherwise it
+            // guesses the zone by comparing against the file's modification
+            // time, and — this is the part that bit — when the two disagree by
+            // more than a day it discards the value entirely rather than
+            // guessing wrong. A graded export of anything shot before yesterday
+            // hit exactly that: correct EXIF, freshly-written file, DATE_TAKEN
+            // null. Declaring the offset removes the guess.
+            //
+            // For a source that was already dated but zoneless, the offset is
+            // not invented: the wall clock read as UTC, minus the instant
+            // MediaStore holds for the same photograph, *is* the zone it was
+            // shot in.
+            if (offset != null) {
+                target.setAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, offset)
+                if (target.getAttribute(ExifInterface.TAG_OFFSET_TIME) == null) {
+                    target.setAttribute(ExifInterface.TAG_OFFSET_TIME, offset)
                 }
             }
             target.saveAttributes()
         }.onFailure { Log.w(TAG, "EXIF could not be applied to $staged", it) }
 
         return staged
+    }
+
+    /**
+     * The zone a zoneless EXIF timestamp was written in, recovered from the
+     * instant MediaStore recorded for the same photograph.
+     *
+     * Returns null when the two disagree by more than any real zone offset —
+     * which means one of them is not what it claims to be, and a fabricated
+     * offset would be worse than none.
+     */
+    private fun deriveUtcOffset(wallClock: String, instant: Long): String? {
+        val asUtc = runCatching {
+            SimpleDateFormat(EXIF_DATE_PATTERN, Locale.US)
+                .apply { timeZone = TimeZone.getTimeZone("UTC") }
+                .parse(wallClock)
+        }.getOrNull() ?: return null
+        // Rounded to the quarter hour: every real zone is a multiple of 15
+        // minutes, and the two sources are only second-accurate.
+        val raw = asUtc.time - instant
+        val rounded = Math.round(raw / QUARTER_HOUR_MILLIS.toDouble()) * QUARTER_HOUR_MILLIS
+        if (kotlin.math.abs(rounded) > MAX_ZONE_OFFSET_MILLIS) return null
+        return formatUtcOffset(rounded.toInt())
+    }
+
+    /** EXIF 2.31 `OffsetTime` — `+HH:MM` / `-HH:MM`. */
+    private fun formatUtcOffset(millis: Int): String {
+        val total = millis / 60_000
+        val sign = if (total < 0) '-' else '+'
+        val abs = kotlin.math.abs(total)
+        return String.format(Locale.US, "%c%02d:%02d", sign, abs / 60, abs % 60)
     }
 
     /**
@@ -483,11 +565,20 @@ class MediaStoreRepository @Inject constructor(
 
     companion object {
         /**
-         * EXIF 2.3 §4.6.4 — `yyyy:MM:dd HH:mm:ss`, in local time with no zone.
+         * EXIF 2.3 §4.6.4 — `yyyy:MM:dd HH:mm:ss`, a wall clock with no zone.
          * `Locale.US` because the pattern is a wire format, not a display one:
          * a locale with non-Latin digits produces a stamp nothing can parse.
+         *
+         * The pattern rather than a shared `SimpleDateFormat`, because
+         * `SimpleDateFormat` is not thread-safe and grading runs frames in
+         * parallel — a shared instance corrupts stamps under concurrency.
          */
-        private val EXIF_DATE_FORMAT = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+        private const val EXIF_DATE_PATTERN = "yyyy:MM:dd HH:mm:ss"
+
+        private const val QUARTER_HOUR_MILLIS = 15L * 60 * 1000
+
+        /** UTC+14 (Kiritimati) is the largest offset in use. */
+        private const val MAX_ZONE_OFFSET_MILLIS = 14L * 60 * 60 * 1000
 
         private const val TAG = "SiftMediaStore"
 

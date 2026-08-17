@@ -100,6 +100,64 @@ class ExportMetadataTest {
     }
 
     /**
+     * `DateTimeOriginal` is a wall clock with no zone, so on its own it does not
+     * name an instant — and MediaProvider will not guess. It fills `DATE_TAKEN`
+     * from the tag outright only when an offset tag says which zone the wall
+     * clock is in; without one it compares against the file's modification time
+     * and, when they disagree by more than a day, discards the value rather than
+     * guessing wrong. Every export is a file written just now, so *every* photo
+     * older than yesterday hit that and came back with `DATE_TAKEN` null.
+     *
+     * The assertion is a round trip rather than a literal offset, because the
+     * right offset depends on the device's zone and the property that matters is
+     * that the pair resolves to the original instant.
+     */
+    @Test
+    fun anExportNamesTheZoneItsCaptureTimeIsIn() {
+        val uri = export(dateTaken = CAPTURE_MILLIS, sourceUri = null)
+
+        val exif = context.contentResolver.openInputStream(uri)?.use { ExifInterface(it) }
+        assertNotNull(exif)
+        assertNotNull(
+            "no offset tag — MediaStore will not trust the capture time without one",
+            exif!!.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL),
+        )
+        assertEquals(
+            "capture time and offset must resolve to the instant it was shot",
+            CAPTURE_MILLIS,
+            exif.dateTimeOriginal,
+        )
+    }
+
+    /**
+     * The real-world case: the source is a photograph that already carries a
+     * capture time, and its camera never wrote an offset — which is most of
+     * them. The zone is not invented, it is recovered, because the wall clock
+     * read as UTC minus the instant MediaStore holds for the same photograph is
+     * by definition the offset it was written in.
+     */
+    @Test
+    fun aZonelessSourceHasItsZoneRecoveredRatherThanDropped() {
+        val source = writeTaggedJpeg(
+            width = 32,
+            height = 24,
+            orientation = ExifInterface.ORIENTATION_NORMAL,
+            dateTimeOriginal = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+                .format(java.util.Date(CAPTURE_MILLIS)),
+        )
+
+        val uri = export(dateTaken = CAPTURE_MILLIS, sourceUri = source)
+
+        val exif = context.contentResolver.openInputStream(uri)?.use { ExifInterface(it) }
+        assertNotNull(exif)
+        assertNotNull(
+            "the source's zoneless capture time was carried over without a zone",
+            exif!!.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL),
+        )
+        assertEquals(CAPTURE_MILLIS, exif.dateTimeOriginal)
+    }
+
+    /**
      * The other reported bug: photos coming out rotated.
      *
      * `ImageDecoder` applies EXIF orientation itself — unlike `BitmapFactory` —
@@ -159,7 +217,12 @@ class ExportMetadataTest {
     }
 
     /** A real JPEG in MediaStore carrying a chosen EXIF orientation tag. */
-    private fun writeTaggedJpeg(width: Int, height: Int, orientation: Int): Uri {
+    private fun writeTaggedJpeg(
+        width: Int,
+        height: Int,
+        orientation: Int,
+        dateTimeOriginal: String? = null,
+    ): Uri {
         val rgb = ByteArray(width * height * 3)
         for (i in rgb.indices) rgb[i] = 0x20
         // Mark the first row so a rotation is detectable beyond dimensions.
@@ -182,6 +245,8 @@ class ExportMetadataTest {
         resolver.openFileDescriptor(uri, "rw")?.use { fd ->
             ExifInterface(fd.fileDescriptor).apply {
                 setAttribute(ExifInterface.TAG_ORIENTATION, orientation.toString())
+                // Deliberately no offset tag: that is what a real camera writes.
+                dateTimeOriginal?.let { setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, it) }
                 saveAttributes()
             }
         }

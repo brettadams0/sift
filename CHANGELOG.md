@@ -3,6 +3,61 @@
 All versions are sideload-only builds signed with the same key, so every one
 installs over the last as an update (see [dist/](dist/)).
 
+## 0.2.8
+
+The export date is fixed, and the instrumentation added in 0.2.7 is what fixed
+it. That same run also showed the 12MP grade now completes at full resolution.
+
+### Fixed
+
+- **Graded exports landed at the top of the gallery dated today.** Three
+  releases tried to write `DATE_TAKEN`; the instrumented run measured the
+  result:
+
+  ```
+  export date: wanted=1552555613000 updateRows=0 err=null
+               readback=datetaken=null date_added=… date_modified=…
+  ```
+
+  Zero rows changed, no exception, on both API 30 and 35. **A non-system app
+  cannot write those columns at all** — MediaProvider drops `DATE_TAKEN` and
+  `DATE_MODIFIED` from an update by an ordinary caller, is left with nothing to
+  apply, and returns 0. Every previous attempt was writing to a column the
+  provider silently ignores, which is exactly why each one looked reasonable and
+  changed nothing.
+
+  Both columns are derived from the file, so the fix is to hand the scanner a
+  file that already says the right thing:
+
+  - `DATE_TAKEN` comes from EXIF `DateTimeOriginal` — but that is a wall clock
+    with no zone, so it does not name an instant, and MediaProvider will not
+    guess. It trusts the tag outright only when an offset tag says which zone
+    the wall clock is in; without one it compares against the file's
+    modification time and **discards the value when the two disagree by more
+    than a day**. An export is always a file written just now, so every photo
+    older than yesterday hit that: correct EXIF, valid file, `DATE_TAKEN` null.
+    Exports now carry `OffsetTimeOriginal`.
+  - `DATE_MODIFIED` is read off the filesystem, so the exported file's
+    modification time is set to the capture time before `IS_PENDING` clears and
+    the scan reads it.
+
+  For a source that was already dated but zoneless — most cameras — the offset
+  is recovered rather than invented: the wall clock read as UTC, minus the
+  instant MediaStore holds for the same photograph, is the offset it was
+  written in.
+
+- **A shared `SimpleDateFormat` was formatting EXIF stamps from parallel
+  grading threads.** It is not thread-safe. Never observed, latent since the
+  pipeline was parallelised.
+
+### Confirmed
+
+- **A 12MP frame now grades at full resolution.** 0.2.7's corrected memory test
+  reports `4000x3000 … fellBack=false` on both API 30 (512MB heap) and API 35
+  (576MB), where it previously fell back to a reduced-resolution grade. §13's
+  2.5s budget is still missed by a wide margin on a 2-core emulator (12.6s and
+  21.0s), which remains open and is not what these releases were about.
+
 ## 0.2.7
 
 The first honest CI run showed the 0.2.5 memory work had no measurable effect,

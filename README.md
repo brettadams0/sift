@@ -15,7 +15,7 @@ Built to [`SIFT_SPEC.md`](docs/SIFT_SPEC.md) v3.
 
 ## Status
 
-Current build: **0.2.7** (`versionCode` 13). `./gradlew build` is green, and
+Current build: **0.2.8** (`versionCode` 14). `./gradlew build` is green, and
 `./gradlew assembleRelease` produces a **3.0 MB signed APK** that `apksigner`
 verifies as installable across API 30–35.
 Download it from [`dist/`](dist/).
@@ -28,7 +28,7 @@ Download it from [`dist/`](dist/).
 | **M3** | Float pipeline + `FrameAnalysis` + Portrait grade | **Done and tested** |
 | **M4** | Scene grade + router | **Done and tested** |
 | **M5** | Quality gates + fallback | **Done and tested** |
-| **M6** | Export presets, encode, EXIF, settings | **Run on a device**; capture date preserved since 0.1.2 |
+| **M6** | Export presets, encode, EXIF, settings | **Run on a device**; capture date actually preserved since 0.2.8 |
 | **M7** | Review UI, lifecycle, deferred original-trashing | **Run on a device**; approve-and-trash covered by §14.10 device tests |
 | **M8** | Upscale | **Deliberately not built** — see below |
 
@@ -215,9 +215,9 @@ device, which is the argument for this suite existing.
   the test turns on. It reports as *skipped* rather than passing vacuously,
   because a green parity test with no fixtures is worse than none on the one gate
   §6.2 calls the only defence against the LAB trap.
-- **§13's 12MP budget is missed, and on a 512MB heap the full-resolution grade
-  does not run at all.** See [performance](#performance). Exports on such a
-  device are 2048px masters and nothing tells the user that.
+- **§13's 12MP budget is missed.** A full-resolution 12MP grade does now run in
+  a 512MB heap — CI reports `4000x3000 … fellBack=false` on API 30 and 35 — but
+  it takes 12.6s there against a 2.5s budget. See [performance](#performance).
 - **UI tests cover one screen, not five.** `PendingScreenTest` drives the bin
   through its real view model and pins the two 0.2.1 defects, but the deck,
   review, grid and settings screens have no UI coverage. The bin got tests
@@ -327,9 +327,14 @@ grades were being refused and requeued to OOM again in a loop.
 
 Timing is unchanged within measurement noise — 5.0s warm median against 5.4s
 before, on a container running at load 3.4. These changes bought resolution, not
-speed. §13's 2.5s budget is still missed by roughly 2×, and closing that is a
-different problem: fixed-point, tiling, or NDK/SIMD, which reopens the OpenCV
-decision above.
+speed.
+
+**It worked, and the device tests now say so rather than the bench.** The first
+run with a correctly-configured `GradeMemoryTest` reports a 4000x3000 grade
+completing with `fellBack=false` on both API 30 (512MB heap) and API 35 (576MB).
+The budget is a different matter: 12.6s and 21.0s respectively, on two emulated
+cores, against §13's 2.5s. Closing that is a different problem — fixed-point,
+tiling, or NDK/SIMD, which reopens the OpenCV decision above.
 
 ---
 

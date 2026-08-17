@@ -1,9 +1,9 @@
 # Prebuilt APK
 
-`sift-0.2.7-release.apk` — signed, minSdk 30, 3.0 MB.
+`sift-0.2.8-release.apk` — signed, minSdk 30, 3.0 MB.
 
 Direct download (works in a phone browser):
-https://github.com/brettadams0/sift/raw/main/dist/sift-0.2.7-release.apk
+https://github.com/brettadams0/sift/raw/main/dist/sift-0.2.8-release.apk
 
 Install steps: [../docs/INSTALL.md](../docs/INSTALL.md)
 
@@ -13,7 +13,8 @@ installs straight over 0.1.x as an update and keeps your database and your
 pending queues. If Android refuses with a signature mismatch, the file did not
 come from this repository; do not uninstall to force it, ask instead.
 
-Upgrading from 0.1.x runs a Room migration (schema v1 → v2). Nothing is dropped.
+Upgrading from an earlier build runs the Room migrations up to schema v3.
+Nothing is dropped.
 
 ## Why a binary is committed here
 
