@@ -339,10 +339,20 @@ class MediaStoreRepository @Inject constructor(
             runCatching { resolver.delete(uri, null, null) }
             throw e
         } finally {
+            // DATE_TAKEN rides along with the IS_PENDING clear rather than
+            // following it. Clearing the flag is what makes MediaProvider
+            // finalise the row, and values supplied in that same update are
+            // applied as part of it — a separate update afterwards was racing
+            // whatever the finalisation does and losing.
             values.clear()
             values.put(MediaStore.Images.Media.IS_PENDING, 0)
-            runCatching { resolver.update(uri, values, null, null) }
+            if (dateTakenMillis != null && dateTakenMillis > 0) {
+                values.put(MediaStore.Images.Media.DATE_TAKEN, dateTakenMillis)
+                values.put(MediaStore.Images.Media.DATE_MODIFIED, dateTakenMillis / 1000)
+            }
+            val finalised = runCatching { resolver.update(uri, values, null, null) }
             staged.delete()
+            Log.i(TAG, "export finalise: rows=${finalised.getOrNull()} err=${finalised.exceptionOrNull()}")
         }
 
         // Re-apply the date *after* IS_PENDING clears, and this is the whole
@@ -361,7 +371,17 @@ class MediaStoreRepository @Inject constructor(
                 // DATE_MODIFIED is in seconds, not millis.
                 put(MediaStore.Images.Media.DATE_MODIFIED, dateTakenMillis / 1000)
             }
-            runCatching { resolver.update(uri, dated, null, null) }
+            val rows = runCatching { resolver.update(uri, dated, null, null) }
+
+            // Three attempts at this bug have each been a plausible theory that
+            // turned out to be wrong, so the next one gets facts instead. The
+            // instrumented job dumps this tag's logcat, which makes the actual
+            // behaviour — not a guess about it — visible in the CI output.
+            Log.i(
+                TAG,
+                "export date: wanted=$dateTakenMillis updateRows=${rows.getOrNull()} " +
+                    "err=${rows.exceptionOrNull()} readback=${readDateColumns(uri)}",
+            )
         }
         return uri
     }
@@ -431,6 +451,27 @@ class MediaStoreRepository @Inject constructor(
 
         return staged
     }
+
+    /**
+     * What MediaStore actually holds for a row, for diagnosis.
+     *
+     * Temporary in spirit but cheap enough to keep: when an export turns up in
+     * the wrong place in the gallery, this is the first question worth asking
+     * and the answer is otherwise invisible on a phone.
+     */
+    private fun readDateColumns(uri: Uri): String = runCatching {
+        val columns = arrayOf(
+            MediaStore.Images.Media.DATE_TAKEN,
+            MediaStore.Images.Media.DATE_ADDED,
+            MediaStore.Images.Media.DATE_MODIFIED,
+        )
+        resolver.query(uri, columns, null, null, null)?.use { c ->
+            if (!c.moveToFirst()) return@use "no row"
+            columns.indices.joinToString(" ") { i ->
+                "${columns[i]}=" + if (c.isNull(i)) "null" else c.getLong(i).toString()
+            }
+        } ?: "query returned null"
+    }.getOrElse { "query failed: $it" }
 
     /** §9.6 — refuse a batch below 2 GB free, with a clear message. */
     fun freeBytes(): Long = runCatching {

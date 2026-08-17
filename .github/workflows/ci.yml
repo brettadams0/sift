@@ -153,7 +153,7 @@ jobs:
           # reports success while the tests failed. That happened: two runs were
           # reported green with failing tests in them. Chained with `;` in a
           # single invocation, the variable survives and the exit code is real.
-          script: ./gradlew :core:data:connectedDebugAndroidTest :app:connectedDebugAndroidTest; status=$?; echo "::group::On-device measurements (§13)"; adb logcat -d -s SiftGradeMemoryTest:I || true; echo "::endgroup::"; exit $status
+          script: ./gradlew :core:data:connectedDebugAndroidTest :app:connectedDebugAndroidTest; status=$?; echo "::group::On-device measurements (§13)"; adb logcat -d -s SiftGradeMemoryTest:I SiftMediaStore:I || true; echo "::endgroup::"; exit $status
 
       - name: Publish instrumented test report
         if: always()

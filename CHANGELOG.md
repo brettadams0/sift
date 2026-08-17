@@ -3,6 +3,43 @@
 All versions are sideload-only builds signed with the same key, so every one
 installs over the last as an update (see [dist/](dist/)).
 
+## 0.2.7
+
+The first honest CI run showed the 0.2.5 memory work had no measurable effect,
+and the reason was the test, not the code.
+
+### Fixed
+
+- **The memory test measured a configuration the app does not use.**
+  `GradeMemoryTest` built its `Pipeline.Request` without `ownsSource`, so it
+  defaulted to false and the pipeline still copied the source frame — the single
+  largest allocation 0.2.5 removed. The OOM headroom came back within 7KB of the
+  pre-optimisation figure, which is what a no-op looks like. The test now matches
+  `GradeWorker`.
+- **A UI test raced an asynchronous Room `Flow`.** The bin's queue arrives on a
+  background dispatcher, so the first composition always shows the empty state
+  and Compose is idle for the gap before the real content lands. Asserting
+  straight after `setContent` passed on API 35 and failed on API 30 — a timing
+  difference, not a behavioural one. It waits for the screen to settle now.
+
+### Changed
+
+- **The export date is instrumented rather than guessed at again.** Three
+  attempts have each been a plausible theory that turned out to be wrong, and
+  the device tests still report `DATE_TAKEN` null. This release folds the write
+  into the same update that clears `IS_PENDING` — the operation that finalises
+  the row — and logs the update's row count, any exception, and a read-back of
+  all three date columns. CI dumps that log, so the next attempt starts from
+  evidence.
+
+### Known failing
+
+`ExportMetadataTest`'s two date assertions and
+`GradeMemoryTest.twelveMegapixelGradeCompletesAtFullResolution` fail on API 30
+and 35. They are left failing on purpose: the first is unproven and the second
+is the honest state of §13. The EXIF capture-time test passes, so the file
+itself carries the right date even where MediaStore does not.
+
 ## 0.2.6
 
 CI had been reporting green while tests failed. Fixing that surfaced three real

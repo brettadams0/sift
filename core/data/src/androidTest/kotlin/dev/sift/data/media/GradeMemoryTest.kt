@@ -131,6 +131,13 @@ class GradeMemoryTest {
                 source = Pipeline.SourceFrame(frame),
                 preset = ExportPreset.MASTER,
                 ditherSeed = 7L,
+                // Matches GradeWorker. Without this the request defaults to
+                // ownsSource = false and the pipeline copies the source frame —
+                // so the test measured 144MB the app does not actually spend,
+                // and reported an OOM headroom identical to before the
+                // allocation work. The test was benchmarking a configuration
+                // nothing ships.
+                ownsSource = true,
             ),
         )
         val elapsedMs = (System.nanoTime() - started) / 1_000_000

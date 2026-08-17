@@ -41,8 +41,8 @@ android {
         applicationId = "dev.sift"
         minSdk = 30
         targetSdk = 35
-        versionCode = 12
-        versionName = "0.2.6"
+        versionCode = 13
+        versionName = "0.2.7"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

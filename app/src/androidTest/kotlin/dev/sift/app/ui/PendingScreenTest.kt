@@ -103,7 +103,7 @@ class PendingScreenTest {
     fun pressingDeleteInvokesCommit() {
         queueForDeletion(3)
         var commits = 0
-        setContent(onCommit = { commits++ })
+        setContent(onCommit = { commits++ }, expectQueued = 3)
 
         compose.onNodeWithText("Delete 3").assertIsDisplayed().performClick()
 
@@ -128,7 +128,7 @@ class PendingScreenTest {
     @Test
     fun theDeleteLabelFitsOnOneLine() {
         queueForDeletion(12)
-        setContent()
+        setContent(expectQueued = 12)
 
         val layouts = mutableListOf<TextLayoutResult>()
         compose.onNodeWithText("Delete 12", useUnmergedTree = true)
@@ -149,7 +149,7 @@ class PendingScreenTest {
     @Test
     fun theLabelCountsWhatIsActuallyQueued() {
         queueForDeletion(2)
-        setContent()
+        setContent(expectQueued = 2)
 
         compose.onNodeWithText("Delete 2").assertIsDisplayed()
         compose.onNodeWithText("2 to delete").assertIsDisplayed()
@@ -162,7 +162,7 @@ class PendingScreenTest {
     @Test
     fun rescuingOneLeavesTheOthersQueued() {
         queueForDeletion(3)
-        setContent()
+        setContent(expectQueued = 3)
 
         assertEquals(
             "every queued photo needs its own rescue control",
@@ -190,12 +190,28 @@ class PendingScreenTest {
         )
     }
 
-    private fun setContent(onBack: () -> Unit = {}, onCommit: () -> Unit = {}) {
+    /**
+     * @param expectQueued how many photos the screen should settle on showing.
+     *
+     * `waitForIdle` is not enough on its own. The queue arrives over a Room
+     * `Flow` collected on a background dispatcher, so the first composition
+     * always renders the empty state and the real content lands a moment later —
+     * Compose is idle for that whole gap. Asserting straight after `setContent`
+     * raced the emission, which is why `pressingDeleteInvokesCommit` failed on
+     * API 30 and passed on API 35: a timing difference, not a behavioural one.
+     */
+    private fun setContent(
+        onBack: () -> Unit = {},
+        onCommit: () -> Unit = {},
+        expectQueued: Int = 0,
+    ) {
         compose.setContent {
             SiftTheme {
                 PendingScreen(onBack = onBack, onCommit = onCommit, viewModel = viewModel)
             }
         }
+        val settled = if (expectQueued > 0) "Delete $expectQueued" else "Nothing queued"
+        compose.waitUntil(SETTLE_TIMEOUT_MS) { compose.countWithText(settled) > 0 }
         compose.waitForIdle()
     }
 
@@ -215,6 +231,10 @@ class PendingScreenTest {
         seenAt = null,
     )
 
+    private companion object {
+        /** Generous: a cold emulator can be slow to deliver the first emission. */
+        const val SETTLE_TIMEOUT_MS = 5_000L
+    }
 }
 
 /** Counting helpers, kept out of the test bodies so the assertions read cleanly. */
