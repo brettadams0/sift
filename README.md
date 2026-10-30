@@ -17,8 +17,6 @@ and that A/B has not run.
 **[Download the APK](dist/)** — a signed sideload build for Android 11 or newer (API 30+);
 [install guide](docs/INSTALL.md).
 
-<img src="docs/grade-before-after.webp" width="720" height="239" alt="Two copies of the same photo side by side, labelled before and after (sift). A smiling astronaut with grey-streaked curly hair floats inside a cream-walled space station module in a navy sweatshirt, a crewmate's arm at the left edge. In the after copy, her skin and the wall are slightly brighter and warmer; everything else is unchanged.">
-
 ## Does it know when to leave a photo alone?
 
 A grader run unattended over someone's whole camera roll is only safe if it can tell when it is
@@ -52,13 +50,13 @@ newly clipped, no more than 0.2% newly crushed (§6.12) — and nothing was tune
 ([`GateResults.kt`](core/model/src/main/kotlin/dev/sift/model/GateResults.kt),
 [`QualityGates.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/QualityGates.kt))
 
-Whether it refuses *too often* is a separate question, and this run doesn't settle it. For the
-stock set, a likely reason is the input: those photographs have already been edited, so a
-correction derived from the frame has little to fix and some room to clip. That explanation
-doesn't cover the ISS set, which is the closer match to a camera roll and was still refused 8
-times in 14, with new clipping reaching 5.1% of the frame against a 0.2% limit.
-<!-- PENDING W1: verdict on whether the 0.2% limits are correctly calibrated or an order of
-magnitude too tight. This paragraph's conclusion depends on it. -->
+Every clipping refusal was 5 to 25.5 times the limit (1.0% and 5.1% of the frame against 0.2%).
+The obvious explanation would be the input — stock photographs are already edited, so there is
+little to fix and room to overshoot — and the data rules it out. The ISS set, chosen because it is
+the closer match to a camera roll, did worse: 1 of 14 graded and passed, against 3 of 14 for stock. Either
+the limits are wrong or the grade pushes too hard, and this run alone doesn't say which.
+<!-- PENDING W1: H1 (0.2% limits miscalibrated) vs H2 (grader too aggressive, gates right).
+Finish this paragraph only when the verdict lands. -->
 
 The four that passed moved a long way: mean ΔE76 of 6.2 on the ISS photograph, and 11.6, 9.6 and
 19.2 on the three stock portraits. All four got lighter, by ΔL\* +4.3 to +18.1, and two shifted
@@ -66,7 +64,10 @@ colour more than they lightened: Δb\* +9.1 (yellower) on one, Δa\* +6.6 (redde
 how far the pixels moved, not that they moved toward anything better; there is no reference to
 score skin against. Two of the stock grades show it: one picks up a magenta cast in the sky, and
 the 19.2 is a washed-out lift. They pass the gates and are still not good, which is why none of
-them is the picture at the top of this page.
+them is shown on its own. The one in-domain pass is a modest change — slightly brighter and
+warmer:
+
+<img src="docs/grade-before-after.webp" width="720" height="239" alt="Two copies of the same photo side by side, labelled before and after (sift). A smiling astronaut with grey-streaked curly hair floats inside a cream-walled space station module in a navy sweatshirt, a crewmate's arm at the left edge. In the after copy, her skin and the wall are slightly brighter and warmer; everything else is unchanged.">
 
 The ten routed out are a bug, not restraint. The document detector, `isLikelyDocument`, classed
 real photographs as documents — five from each set — and they were never graded. One is a
@@ -78,7 +79,8 @@ photographs, and one is the cat. Screenshot detection fired on none of the 28.
 Caveats: 28 photographs is not a camera roll, and the inputs are 1920 px renders from Wikimedia
 Commons, not camera originals. The per-photo record — outcome, gate, measured value, ΔE76 and its
 L\*, a\*, b\* components — is in [`results/grade-samples.json`](results/grade-samples.json).
-With JDK 17 and Pillow, one command regenerates it and both grids byte for byte:
+With JDK 17 and Pillow, one command regenerates it and every committed image byte for byte —
+checked by comparing sha256 before and after a rerun:
 
 ```sh
 python tools/samples/make_assets.py
