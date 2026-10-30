@@ -17,6 +17,8 @@ and that A/B has not run.
 **[Download the APK](dist/)** — a signed sideload build for Android 11 or newer (API 30+);
 [install guide](docs/INSTALL.md).
 
+<img src="docs/grade-outcomes-iss.webp" width="720" height="547" alt="A grid of 14 photos taken aboard the International Space Station: crew portraits, group shots and astronauts at work among cables and equipment. A coloured bar under each photo says what sift did with it. One green 'graded, mean dE76 6.2'. Eight orange 'fell back', each naming the gate it failed, such as 'clipped 5.1% > 0.2%' or 'crushed 1.7% > 0.2%'. Five grey 'routed out, document detector'.">
+
 ## Does it know when to leave a photo alone?
 
 A grader run unattended over someone's whole camera roll is only safe if it can tell when it is
@@ -25,27 +27,28 @@ whether the bad ones are stopped. The pipeline was run exactly as the app calls 
 preset, no face detector, which is what ships — over 28 photographs in two sets of 14:
 
 - **ISS**: NASA snapshots taken aboard the space station under cabin lighting, the closest
-  public-domain stand-in for a phone camera roll.
+  public-domain stand-in for a phone camera roll. That is the grid at the top of this page.
 - **Stock**: CC0 professional photographs, already graded by whoever published them; 13 portraits
   and a cat.
 
 Every input is pinned by URL, licence and sha256 in
 [`tools/samples/sources.json`](tools/samples/sources.json).
 
-<img src="docs/grade-outcomes-iss.webp" width="720" height="547" alt="A grid of 14 photos taken aboard the International Space Station: crew portraits, group shots and astronauts at work among cables and equipment. A coloured bar under each photo says what sift did with it. One green 'graded, mean dE76 6.2'. Eight orange 'fell back', each naming the gate it failed, such as 'clipped 5.1% > 0.2%' or 'crushed 1.7% > 0.2%'. Five grey 'routed out, document detector'.">
-
 <img src="docs/grade-outcomes-stock.webp" width="720" height="547" alt="A grid of 14 professionally shot stock photos, 13 of them portraits and one of a tabby cat. A coloured bar under each says what sift did with it. Three green 'graded' with mean dE76 11.6, 9.6 and 19.2. Six orange 'fell back', each naming the gate it failed, such as 'clipped 1.1% > 0.2%' or 'crushed 2.6% > 0.2%'. Five grey 'routed out, document detector', including a black-and-white portrait and the cat.">
 
 | 28 photographs | ISS | Stock | Measured | Limit |
 |---|---:|---:|---:|---:|
 | Graded and passed every gate | 1 | 3 | mean ΔE76 6.2 – 19.2 | — |
-| Graded, then refused: new clipping | | | 9 photos, **1.0 – 5.1%** of the frame | 0.2% |
-| Graded, then refused: shadow crush | | | 5 photos, **0.4 – 2.6%** of the frame | 0.2% |
+| Graded, then refused: new clipping | 7 | 2 | **1.0 – 5.1%** of the frame | 0.2% |
+| Graded, then refused: shadow crush | 1 | 4 | **0.4 – 2.6%** of the frame | 0.2% |
 | &nbsp;&nbsp;refused in total, original shipped | 8 | 6 | **14 of 28** | |
 | Routed out as non-photographic (a bug) | 5 | 5 | 10 of 28 | |
 
 Fourteen photographs were graded, measured as worse by the spec's own rule, and handed back
-untouched. That is the gates working. Both limits are the spec's — no more than 0.2% of the frame
+untouched. That is the gates working. A photo that failed both gates is counted under the one it
+missed by more; every gate it failed is in its row of the results file. The ISS set was refused
+mostly for new clipping, the stock set mostly for crushed shadows — with 14 photos in each, an
+observation rather than a rate. Both limits are the spec's — no more than 0.2% of the frame
 newly clipped, no more than 0.2% newly crushed (§6.12) — and nothing was tuned for this run.
 ([`GateResults.kt`](core/model/src/main/kotlin/dev/sift/model/GateResults.kt),
 [`QualityGates.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/QualityGates.kt))
@@ -64,7 +67,7 @@ colour more than they lightened: Δb\* +9.1 (yellower) on one, Δa\* +6.6 (redde
 how far the pixels moved, not that they moved toward anything better; there is no reference to
 score skin against. Two of the stock grades show it: one picks up a magenta cast in the sky, and
 the 19.2 is a washed-out lift. They pass the gates and are still not good, which is why none of
-them is shown on its own. The one in-domain pass is a modest change — slightly brighter and
+them is the picture at the top of this page. The one in-domain pass is a modest change — slightly brighter and
 warmer:
 
 <img src="docs/grade-before-after.webp" width="720" height="239" alt="Two copies of the same photo side by side, labelled before and after (sift). A smiling astronaut with grey-streaked curly hair floats inside a cream-walled space station module in a navy sweatshirt, a crewmate's arm at the left edge. In the after copy, her skin and the wall are slightly brighter and warmer; everything else is unchanged.">
