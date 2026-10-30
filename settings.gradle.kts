@@ -55,3 +55,7 @@ if (androidSdkPresent) {
             "Set ANDROID_HOME or add local.properties to build the app.",
     )
 }
+
+// Generates the before/after images in docs/ by running the real pipeline over
+// public-domain photos. Pure JVM, not part of the app; see tools/samples/.
+include(":tools:samples")
