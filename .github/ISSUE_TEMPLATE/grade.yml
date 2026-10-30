@@ -1,0 +1,37 @@
+name: A grade looks wrong
+description: A graded photo came out worse than its original, or fell back when it should not have.
+labels: [grading]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Photos are never required. A description of the scene and what changed is useful on its
+        own; if you attach images, only attach ones you are willing to have public.
+  - type: input
+    id: version
+    attributes:
+      label: Sift version
+      placeholder: "0.2.8"
+    validations:
+      required: true
+  - type: dropdown
+    id: grade
+    attributes:
+      label: Grade
+      options:
+        - Portrait
+        - Scene
+        - Fell back to the original
+        - Not sure
+  - type: textarea
+    id: what
+    attributes:
+      label: What looks wrong
+      description: Skin tone, crushed shadows, clipped highlights, banding, oversharpening, colour cast — and the kind of scene.
+    validations:
+      required: true
+  - type: input
+    id: gate
+    attributes:
+      label: Gate message
+      description: If review showed which quality gate failed, its exact text.

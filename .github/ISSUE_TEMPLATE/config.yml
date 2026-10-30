@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Install and first-run guide
+    url: https://github.com/brettadams0/sift/blob/main/docs/INSTALL.md
+    about: Sideloading, the signing key, and permissions on first run.

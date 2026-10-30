@@ -1,0 +1,44 @@
+name: Bug on a device
+description: Something went wrong in the app on a phone or emulator.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every bug fixed so far was found on a real device. The device and Android version are the
+        two things a fix depends on most.
+  - type: input
+    id: version
+    attributes:
+      label: Sift version
+      description: Android Settings → Apps → Sift shows it, as does the APK file name from dist/.
+      placeholder: "0.2.8"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and Android version
+      placeholder: "Pixel 7, Android 15"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - Library scan or grid
+        - Swipe deck or undo
+        - Trash confirmation
+        - Grading or review
+        - Export (file, date, location, folder)
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: Steps if you have them. If a photo was trashed that should not have been, say so first.
+    validations:
+      required: true
