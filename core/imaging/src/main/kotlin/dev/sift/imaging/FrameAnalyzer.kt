@@ -66,7 +66,16 @@ object FrameAnalyzer {
     /** Document signals (§6.3). All three must hold. */
     const val DOCUMENT_EDGE_DENSITY_MIN = 0.10f
     const val DOCUMENT_CHROMA_MAX = 8f
-    const val DOCUMENT_BIMODALITY_MIN = 0.55f
+    /**
+     * Otsu's ratio is 2/π ≈ 0.64 for any normal distribution and 0.75 for a
+     * uniform one, so a floor below that is met by every photograph. It was
+     * 0.55, which left mean chroma as the only working signal and sent muted
+     * photos (a tabby cat, a black-and-white portrait, ISS interiors) to
+     * NON_PHOTOGRAPHIC ungraded. Measured: 28 public-domain photos span
+     * 0.70–0.85, and rendered pages of ink on paper 0.87–0.96. The gap is
+     * narrow; DocumentDetectionTest pins both sides of it.
+     */
+    const val DOCUMENT_BIMODALITY_MIN = 0.86f
 
     /** Cap on flat blocks converted to LAB for the chroma-noise estimate. */
     private const val MAX_CHROMA_NOISE_BLOCKS = 256

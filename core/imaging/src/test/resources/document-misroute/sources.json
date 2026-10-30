@@ -1,0 +1,26 @@
+[
+  {
+    "slug": "curly-hair-and-freckles-man",
+    "set": "stock",
+    "license": "CC0",
+    "page": "https://commons.wikimedia.org/wiki/File:Curly_hair_and_freckles_man_(Unsplash).jpg",
+    "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/16/Curly_hair_and_freckles_man_%28Unsplash%29.jpg/1920px-Curly_hair_and_freckles_man_%28Unsplash%29.jpg",
+    "sha256": "e5e73c6453461bb72595e993e74ecee27a43ef0711094dd0c71db214e9336f05"
+  },
+  {
+    "slug": "outdoor-portrait",
+    "set": "stock",
+    "license": "CC0",
+    "page": "https://commons.wikimedia.org/wiki/File:Outdoor_portrait_(Unsplash).jpg",
+    "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/36/Outdoor_portrait_%28Unsplash%29.jpg/1920px-Outdoor_portrait_%28Unsplash%29.jpg",
+    "sha256": "555e86aae505fe9de265aecff285440a175c5e980f8748da3252ef00ab52ba44"
+  },
+  {
+    "slug": "pexels-krysten-merriman-20787",
+    "set": "stock",
+    "license": "CC0",
+    "page": "https://commons.wikimedia.org/wiki/File:Pexels-krysten-merriman-20787.jpg",
+    "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/3f/Pexels-krysten-merriman-20787.jpg/1920px-Pexels-krysten-merriman-20787.jpg",
+    "sha256": "a45794105370f7886a78ff7e16c30b233c1ad2bd38c627ab636e9e9713edd3d6"
+  }
+]
