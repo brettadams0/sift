@@ -3,53 +3,60 @@
 [![CI](https://github.com/brettadams0/sift/actions/workflows/ci.yml/badge.svg)](https://github.com/brettadams0/sift/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-An Android app for clearing a camera roll. You swipe through photos to keep or reject them, and the
-rejects are trashed in one confirmation. Each keeper is then graded by a pipeline that measures that
-frame and derives its own correction, and the original is trashed only after you approve the
-result. It runs entirely on the phone, and the app ships with **no `INTERNET` permission** — a build
-step reads the merged manifest and fails if one appears. The imaging pipeline is plain Kotlin, with
-no OpenCV and no Android dependency, so its tests run on a bare JVM. The machine-learning upscaler
-the spec describes has deliberately not been built: the spec says to A/B it against a plain Lanczos
-baseline first, and that A/B has not run.
+An Android app for clearing a camera roll, with an on-device photo grader that is allowed to
+say no. You swipe through photos to keep or reject them, and the rejects are trashed in one
+confirmation. Each keeper is then measured and given its own correction, and the result has to pass
+six quality gates before it replaces anything; when a gate fails, the original ships untouched. On
+⟦FACT sift-set-size⟧ public-domain portraits, ⟦FACT sift-passed⟧ were graded and passed,
+⟦FACT sift-gate-refused⟧ were graded and then refused by a gate, and ⟦FACT sift-routed-out⟧ were
+routed away from grading altogether. The original is trashed only after you approve the result.
+Everything runs on the phone, which ships with **no `INTERNET` permission** — a build step fails
+if one appears. The imaging pipeline is plain Kotlin with no OpenCV, and the machine-learning
+upscaler the spec describes is not built: the spec says to A/B it against a plain baseline first,
+and that A/B has not run.
 
 **[Download the APK](dist/)** — a signed sideload build for Android 11 or newer (API 30+);
 [install guide](docs/INSTALL.md).
 
-<!-- HERO (W3): before/after grading images go here — dimensions, weights and alt text to come
-from W3. -->
+## Does it know when to leave a photo alone?
 
-## Does it grade at full resolution?
+A grader run unattended over someone's whole camera roll is only safe if it can tell when it is
+making a photo worse. So the measure here is not how much better the good results look; it is
+whether the bad ones are stopped. The unmodified pipeline was run over ⟦FACT sift-set-size⟧
+CC0 portraits, listed with source URL, licence and sha256 in ⟦FACT sift-manifest-path⟧, and
+recorded what happened to each.
 
-It didn't, and the green test suite couldn't tell. On an emulator with a ⟦FACT sift-12mp-heap⟧
-heap, a full 12-megapixel grade ran out of memory ⟦FACT sift-12mp-oom-margin⟧ short of finishing.
-The fallback in §12 of the spec — retry at half resolution — then produced a ⟦FACT
-sift-fallback-px⟧ image, and the app shipped that as the master. Every large photo on hardware in
-that class was silently downgraded, which is the plain reason graded output looked bad.
+<!-- EVIDENCE FIGURE (W3): the grid of all images, each tagged graded / fell back / routed out,
+with its gate numbers; the passing images sit inside it with their ΔE76, ΔL* and Δb*. Not a
+standalone hero. -->
 
-Peak memory was several full-resolution float copies of the frame alive at once. Four were removed:
-the decoded bitmap is freed before the float frame is allocated, the linear conversion reuses the
-source, quantisation happens in place, and the quality gates read the encoded bytes rather than a
-rebuilt frame. The working copy stays, because each retry in §6.12's chain has to start from an
-untouched frame. ([`Pipeline.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/Pipeline.kt))
+| ⟦FACT sift-set-size⟧ CC0 portraits | Images | Measured | Limit |
+|---|---:|---:|---:|
+| Graded and passed every gate | **⟦FACT⟧** | ΔE76 ⟦FACT⟧ | — |
+| Graded, then refused: new clipping | ⟦FACT⟧ | ⟦FACT⟧ | 0.2% |
+| Graded, then refused: shadow crush | ⟦FACT⟧ | ⟦FACT⟧ | 0.2% |
+| Routed out as non-photographic | ⟦FACT⟧ | — | — |
 
-The first fix appeared to do nothing, and the reason was the test. `GradeMemoryTest` built its
-request without `ownsSource`, so the pipeline still copied the source frame — the largest
-allocation the fix removed. With the test matching what `GradeWorker` actually does:
+Most of those photos were sent back unchanged, and that is the gates doing their job. The likely
+reason is the input: stock portraits have usually been edited already, so a correction derived
+from the frame has little to fix and some room to clip highlights or crush shadows. The gates
+measured that and shipped the original instead. The limits are the spec's — no more than 0.2% of the frame
+newly clipped, no more than 0.2% newly crushed (§6.12) — and nothing about this run was tuned to pass.
+([`GateResults.kt`](core/model/src/main/kotlin/dev/sift/model/GateResults.kt),
+[`QualityGates.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/QualityGates.kt))
 
-| 12 MP grade, on emulators in CI | API 30 | API 35 |
-|---|---:|---:|
-| Heap | ⟦FACT⟧ | ⟦FACT⟧ |
-| Completed at full resolution (`fellBack=false`) | **⟦FACT⟧** | **⟦FACT⟧** |
-| Time per grade, across runs | ⟦FACT⟧ | ⟦FACT⟧ |
-| Budget in §13 of the spec | 2.5 s | 2.5 s |
+<!-- PENDING W1: verdict on whether the 0.2% limits are correctly calibrated or an order of
+magnitude too tight. This paragraph's wording depends on it. -->
 
-It now completes at full resolution, and `GradeMemoryTest` **requires** that rather than accepting
-either outcome, so a regression fails the build. It is still well over the time budget on two
-emulated cores. Closing that means fixed-point, tiling or NDK SIMD, and the last of those reopens
-the OpenCV decision below. The CI job prints the on-device numbers into its log on every run, pass
-or fail; the full history is in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
-([`GradeMemoryTest.kt`](core/data/src/androidTest/kotlin/dev/sift/data/media/GradeMemoryTest.kt),
-[`ci.yml`](.github/workflows/ci.yml))
+The caveat that matters most: **these are stock portraits, not what sift is for.** It targets phone
+camera rolls — auto white balance casts, underexposure — where a frame-derived correction has
+something to correct. Whether it does better there is the open question, and this set says
+nothing about it. A second set from public-domain phone-quality photographs is being measured
+for exactly that reason. ⟦FACT sift-phone-set — results, when they exist⟧
+
+The ⟦FACT sift-routed-out⟧ routed out are a bug, not restraint. ⟦FACT sift-router-defect — W1:
+cause in `isLikelyDocument` and the fix⟧ Genuine portraits were classified as documents and never
+graded. ([`FrameAnalyzer.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/FrameAnalyzer.kt))
 
 ## How it works
 
@@ -101,11 +108,14 @@ resumes instead of trashing twice.
 ## Three places it departs from the spec
 
 The app is built to [`SIFT_SPEC.md`](docs/SIFT_SPEC.md) v3. These are the three places it doesn't
-follow it, and each is a judgement worth arguing with.
+follow it, and each is a judgement worth arguing with. The first is the same rule as the gates,
+applied to the code instead of the photo: nothing ships until it has been measured against
+leaving things alone.
 
 ### The ML upscaler is not built
 
-This is the spec being followed, not departed from. §6.6 ends with an instruction:
+This is the spec being followed, not departed from. A grade has to beat the original or it doesn't
+ship; a model has to beat the baseline or it doesn't get built. §6.6 ends with an instruction:
 
 > Before writing any ONNX code: A/B it. Build a Lanczos + unsharp baseline. Compare on ten of your
 > real photos at 100%. If the difference doesn't justify 30 seconds per image and a native
@@ -131,7 +141,7 @@ the sRGB transfer curve as an 8192-entry interpolated table, and the exact formu
 [0, 1], where the pipeline's unbounded values live. `LabGoldenTest` pins it to published reference
 values rather than to another implementation, so it can't drift in step with a mistaken one — a
 neutral grey must come out with `a*, b*` near 0, not near 128. The cost is several hundred lines of
-image maths and no SIMD, which shows up in the time budget above.
+image maths and no SIMD, which shows up in the time budget (see below).
 ([`ColorSpaces.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/ColorSpaces.kt),
 [`LabGoldenTest.kt`](core/imaging/src/test/kotlin/dev/sift/imaging/LabGoldenTest.kt))
 
@@ -184,8 +194,11 @@ permission in the merged manifest; Room schemas committed with the entity change
 them; and the kotlinx-serialization serializers surviving R8 in the release APK. If an entity
 changes on purpose, commit the regenerated schema under `core/data/schemas` in the same commit.
 
-What the tests prove, what they don't, and what the device suite found on its first run are in
-[`docs/TESTING.md`](docs/TESTING.md). Changes, each with what was wrong and how it was found, are
+A 12 MP grade is still well over §13's 2.5 s budget on emulated hardware, and before 0.2.5 it did
+not complete at full resolution at all (confirmed fixed on device in 0.2.8) — every large photo was silently graded at half resolution
+and shipped that way. That history, with the memory work that fixed it, is in
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md). What the tests prove, what they don't, and what the
+device suite found on its first run are in [`docs/TESTING.md`](docs/TESTING.md). Changes, each with what was wrong and how it was found, are
 in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Layout
