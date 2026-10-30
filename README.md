@@ -1,402 +1,206 @@
-# Sift
+# sift
 
-A swipe-based triage deck over the Android camera roll that batches deletions
-into a single confirmation, then puts keepers through a per-image adaptive
-grading pipeline and exports to a watched folder.
+[![CI](https://github.com/brettadams0/sift/actions/workflows/ci.yml/badge.svg)](https://github.com/brettadams0/sift/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-100% on-device. No accounts, no network, no cost. **The app ships with no
-`INTERNET` permission at all.**
+An Android app for clearing a camera roll. You swipe through photos to keep or reject them, and the
+rejects are trashed in one confirmation. Each keeper is then graded by a pipeline that measures that
+frame and derives its own correction, and the original is trashed only after you approve the
+result. It runs entirely on the phone, and the app ships with **no `INTERNET` permission** — a build
+step reads the merged manifest and fails if one appears. The imaging pipeline is plain Kotlin, with
+no OpenCV and no Android dependency, so its tests run on a bare JVM. The machine-learning upscaler
+the spec describes has deliberately not been built: the spec says to A/B it against a plain Lanczos
+baseline first, and that A/B has not run.
 
-Built to [`SIFT_SPEC.md`](docs/SIFT_SPEC.md) v3.
+**[Download the APK](dist/)** — a signed sideload build for Android 11 or newer (API 30+);
+[install guide](docs/INSTALL.md).
 
-**→ [Install and first-run guide](docs/INSTALL.md)**
+<!-- HERO (W3): before/after grading images go here — dimensions, weights and alt text to come
+from W3. -->
 
----
+## Does it grade at full resolution?
 
-## Status
+It didn't, and the green test suite couldn't tell. On an emulator with a ⟦FACT sift-12mp-heap⟧
+heap, a full 12-megapixel grade ran out of memory ⟦FACT sift-12mp-oom-margin⟧ short of finishing.
+The fallback in §12 of the spec — retry at half resolution — then produced a ⟦FACT
+sift-fallback-px⟧ image, and the app shipped that as the master. Every large photo on hardware in
+that class was silently downgraded, which is the plain reason graded output looked bad.
 
-Current build: **0.2.8** (`versionCode` 14). `./gradlew build` is green, and
-`./gradlew assembleRelease` produces a **3.0 MB signed APK** that `apksigner`
-verifies as installable across API 30–35.
-Download it from [`dist/`](dist/).
+Peak memory was several full-resolution float copies of the frame alive at once. Four were removed:
+the decoded bitmap is freed before the float frame is allocated, the linear conversion reuses the
+source, quantisation happens in place, and the quality gates read the encoded bytes rather than a
+rebuilt frame. The working copy stays, because each retry in §6.12's chain has to start from an
+untouched frame. ([`Pipeline.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/Pipeline.kt))
 
-| Milestone | Deliverable | State |
-|---|---|---|
-| **M0** | Permissions, MediaStore, thumbnail grid | **Run on a device**; empty-library bug fixed in 0.1.2 |
-| **M1** | Swipe deck, Room, undo, batched trash | **Run on a device**; per-photo rescue added in 0.1.4 |
-| **M2** | dHash, clustering, screenshot detection | Logic tested; run on a device, thresholds unvalidated |
-| **M3** | Float pipeline + `FrameAnalysis` + Portrait grade | **Done and tested** |
-| **M4** | Scene grade + router | **Done and tested** |
-| **M5** | Quality gates + fallback | **Done and tested** |
-| **M6** | Export presets, encode, EXIF, settings | **Run on a device**; capture date actually preserved since 0.2.8 |
-| **M7** | Review UI, lifecycle, deferred original-trashing | **Run on a device**; approve-and-trash covered by §14.10 device tests |
-| **M8** | Upscale | **Deliberately not built** — see below |
+The first fix appeared to do nothing, and the reason was the test. `GradeMemoryTest` built its
+request without `ownsSource`, so the pipeline still copied the source frame — the largest
+allocation the fix removed. With the test matching what `GradeWorker` actually does:
 
-**Of 48 tests, 46 pass and 2 are skipped by design** — §14.1 needs your own
-fixtures (see below), and `PipelineBenchmark` is opt-in because it takes a
-minute.
+| 12 MP grade, on emulators in CI | API 30 | API 35 |
+|---|---:|---:|
+| Heap | ⟦FACT⟧ | ⟦FACT⟧ |
+| Completed at full resolution (`fellBack=false`) | **⟦FACT⟧** | **⟦FACT⟧** |
+| Time per grade, across runs | ⟦FACT⟧ | ⟦FACT⟧ |
+| Budget in §13 of the spec | 2.5 s | 2.5 s |
 
-> **It now runs on real hardware, and that is where every bug since 0.1.0 came
-> from.** An empty library (MediaStore paging), exports landing in the gallery
-> with today's date, undo that never returned a photo, and a run where most
-> frames failed a quality gate and were shipped as originals — none of those
-> were visible from a green test suite. Approve-and-trash — the one path whose
-> failure mode is permanent photo loss — now has device tests, and **their first
-> CI run found two more**: §12's requeue was dead code because the lifecycle
-> table would not let an approved asset leave that state, and "the latest job
-> for this asset" was resolved by ordering on grade *duration*, so a stale
-> approval could authorise trashing an original whose current grade had never
-> been seen. See [what is not proven](#what-is-not-proven) for what remains.
+It now completes at full resolution, and `GradeMemoryTest` **requires** that rather than accepting
+either outcome, so a regression fails the build. It is still well over the time budget on two
+emulated cores. Closing that means fixed-point, tiling or NDK SIMD, and the last of those reopens
+the OpenCV decision below. The CI job prints the on-device numbers into its log on every run, pass
+or fail; the full history is in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
+([`GradeMemoryTest.kt`](core/data/src/androidTest/kotlin/dev/sift/data/media/GradeMemoryTest.kt),
+[`ci.yml`](.github/workflows/ci.yml))
+
+## How it works
+
+### Triage
+
+The library is scanned through MediaStore, decoding each photo at no more than 1024 px on the long
+edge, which is what the perceptual hash needs. Near-duplicates are clustered by dHash, and
+screenshots are detected. Swipes are recorded in Room and can be
+undone; nothing is deleted until the batch is confirmed.
+([`MediaStoreRepository.kt`](core/data/src/main/kotlin/dev/sift/data/media/MediaStoreRepository.kt),
+[`PerceptualHash.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/PerceptualHash.kt))
+
+### Grading
+
+Each keeper is measured — tone and clipping, colour cast, chroma, skin, sharpness, noise,
+faces — and routed to a Portrait or a Scene
+grade. A photo counts as a portrait when a face is found or skin covers more than 8% of it
+(`faceCount > 0 || skinFraction > 0.08`). Every parameter is derived from that frame's
+measurements; constants exist only as targets and bounds, which is the spec's first rule. Values
+stay unbounded float end to end, so nothing clamps between stages (§2.1). Per-pixel passes run in parallel by row, except dither, which
+uses a seeded random sequence and is parallelised over fixed chunks so its output stays
+reproducible.
+([`FrameAnalyzer.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/FrameAnalyzer.kt),
+[`FrameAnalysis.kt`](core/model/src/main/kotlin/dev/sift/model/FrameAnalysis.kt),
+[`FaceDetector.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/FaceDetector.kt),
+[`Parallel.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/Parallel.kt))
+
+### Quality gates
+
+Six gates check the result: skin range, no new clipping, no shadow crush, sharpness preserved, no
+banding, chroma sanity. When one fails, the grade is retried along the remedy chain in §6.12,
+and if it still fails the original ships and the report says which gate refused it. A degraded
+photo is worse than an unprocessed one.
+([`QualityGates.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/QualityGates.kt),
+[`GateResults.kt`](core/model/src/main/kotlin/dev/sift/model/GateResults.kt))
+
+### Approval and trash
+
+The original is trashed only when all five invariants in §9.3 hold — among them that the export
+still decodes, checked at that moment rather than at write time. `ApprovalGuard` is the single place
+that decision is made. Rejected photos and approved originals are separate kinds of request with
+separate confirmations, because agreeing to one is not agreeing to the other. Every lifecycle
+transition is written to Room before any file is touched, so a process killed mid-transition
+resumes instead of trashing twice.
+([`ApprovalGuard.kt`](core/data/src/main/kotlin/dev/sift/data/media/ApprovalGuard.kt),
+[`TrashCoordinator.kt`](core/data/src/main/kotlin/dev/sift/data/media/TrashCoordinator.kt),
+[`LifecycleRepository.kt`](core/data/src/main/kotlin/dev/sift/data/media/LifecycleRepository.kt))
+
+## Three places it departs from the spec
+
+The app is built to [`SIFT_SPEC.md`](docs/SIFT_SPEC.md) v3. These are the three places it doesn't
+follow it, and each is a judgement worth arguing with.
+
+### The ML upscaler is not built
+
+This is the spec being followed, not departed from. §6.6 ends with an instruction:
+
+> Before writing any ONNX code: A/B it. Build a Lanczos + unsharp baseline. Compare on ten of your
+> real photos at 100%. If the difference doesn't justify 30 seconds per image and a native
+> dependency, ship the baseline and delete this section.
+
+So what exists is the baseline, the gate that decides whether to upscale at all, the interface a
+model would plug into, the two treatments that stop a learned upscaler looking synthetic — written
+against that interface — and the harness that runs the comparison. What does not exist is a
+Real-ESRGAN session, because building it first would mean doing the work the spec says to justify. Face detection depends on the same decision, and the router works
+without a detector by falling back to the skin rule.
+([`Upscale.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/Upscale.kt),
+[`ModelPolicy.kt`](core/ml/src/main/kotlin/dev/sift/ml/ModelPolicy.kt))
+
+### No OpenCV
+
+The spec lists OpenCV and then names its most dangerous defect: OpenCV ships two different LAB
+scalings, and porting the 8-bit form's `-128` arithmetic into a float pipeline "silently produces
+garbage that still looks like a plausible image". The spec's only defence is a golden test.
+
+Writing the conversion directly removes the trap instead of guarding it. There is no 8-bit LAB
+path here to confuse with the float one. `ColorSpaces` produces true CIELAB and nothing else, with
+the sRGB transfer curve as an 8192-entry interpolated table, and the exact formula used outside
+[0, 1], where the pipeline's unbounded values live. `LabGoldenTest` pins it to published reference
+values rather than to another implementation, so it can't drift in step with a mistaken one — a
+neutral grey must come out with `a*, b*` near 0, not near 128. The cost is several hundred lines of
+image maths and no SIMD, which shows up in the time budget above.
+([`ColorSpaces.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/ColorSpaces.kt),
+[`LabGoldenTest.kt`](core/imaging/src/test/kotlin/dev/sift/imaging/LabGoldenTest.kt))
+
+### A hand-written JPEG encoder
+
+§2.4 requires 4:4:4 chroma — no colour subsampling. Without OpenCV the platform option is
+`Bitmap.compress`, which takes a quality number and nothing else; whether it subsamples depends on
+whichever Skia build the phone has. That turns a requirement into a hope. `JpegEncoder` is a
+baseline encoder with two-pass optimised Huffman tables, and `JpegEncoderTest` doesn't trust its
+own flag: it parses the SOF0 marker of real output and asserts 1×1 sampling on all three
+components.
+([`JpegEncoder.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/JpegEncoder.kt),
+[`JpegEncoderTest.kt`](core/imaging/src/test/kotlin/dev/sift/imaging/JpegEncoderTest.kt))
+
+## Running it
+
+Install the APK from [`dist/`](dist/); [`docs/INSTALL.md`](docs/INSTALL.md) covers sideloading and
+first-run permissions. Every release is signed with the same key, so each one installs over the
+last as an update.
+
+To build, JDK 17. The imaging pipeline needs nothing else; the app needs an Android SDK named in
+`local.properties` (`sdk.dir=...`).
 
 ```sh
-./gradlew :core:imaging:test   # the pipeline — needs only a JDK, no Android SDK
-./gradlew build                # everything, needs local.properties → sdk.dir
+./gradlew :core:imaging:test   # the pipeline; no Android SDK needed
+./gradlew build                # everything
 ./gradlew assembleRelease      # the sideloadable APK
+./gradlew :core:imaging:test -Dsift.bench=true   # also runs PipelineBenchmark, which is opt-in
 ```
 
----
+`settings.gradle.kts` includes the Android modules only when an SDK is present, so the first
+command works on a machine that has never installed one.
 
-## The three deviations from the spec, and why
+## Development
 
-Everything else follows §6.1's canonical order and §0's three rules exactly.
-These three do not, and each is a judgement call worth disagreeing with.
+```sh
+./gradlew :core:model:build :core:imaging:test :core:testing:build   # no Android SDK
+./gradlew assembleDebug assembleRelease
+./gradlew :app:verifyNoNetworkPermissionsRelease
+git status --porcelain core/data/schemas                              # must print nothing
 
-### 1. No OpenCV. The imaging pipeline is pure Kotlin.
+# on emulators, API 30 and API 35
+./gradlew :core:data:connectedDebugAndroidTest :app:connectedDebugAndroidTest
+```
 
-The spec lists OpenCV as the imaging dependency. It is not used.
+The instrumented tests write real files into MediaStore. Run them on an emulator you can wipe.
 
-§6.2 and trap #1 identify the most dangerous defect in the whole document:
-OpenCV ships *two different* LAB scalings, and porting `-128` arithmetic from an
-8-bit reference into a float pipeline "silently produces garbage that still looks
-like a plausible image". The spec's only defence is a golden test.
+Three properties are enforced by the build, and each was checked to fail when broken: no network
+permission in the merged manifest; Room schemas committed with the entity change that produced
+them; and the kotlinx-serialization serializers surviving R8 in the release APK. If an entity
+changes on purpose, commit the regenerated schema under `core/data/schemas` in the same commit.
 
-Writing the conversion directly removes the trap rather than guarding it. There
-is no 8-bit LAB path in this codebase to confuse with the float one; `ColorSpaces`
-produces true CIELAB and nothing else, and `LabGoldenTest` pins it to *published*
-reference values rather than to another implementation, so it cannot drift in
-lockstep with a mistaken reference.
+What the tests prove, what they don't, and what the device suite found on its first run are in
+[`docs/TESTING.md`](docs/TESTING.md). Changes, each with what was wrong and how it was found, are
+in [`CHANGELOG.md`](CHANGELOG.md).
 
-Three things follow from it:
+## Layout
 
-- `:core:imaging` unit-tests on a plain JVM, which is what §4.1 asks for
-  ("independently testable ... it needs to be exercisable in isolation") and what
-  made every number in §6 checkable while building it.
-- §2.1's unbounded float is guaranteed end-to-end, because there is no library
-  boundary that might clamp.
-- The ~15MB native dependency and its ABI restriction go away.
-
-The cost is real: several hundred lines of image maths that OpenCV would have
-provided, and no SIMD. It shows up in §13's budgets — see
-[performance](#performance) below.
-
-### 2. The JPEG encoder is hand-written.
-
-§2.4 requires 4:4:4 chroma and optimised Huffman tables, via OpenCV's
-`IMWRITE_JPEG_SAMPLING_FACTOR_444`. Without OpenCV the platform alternative is
-`Bitmap.compress`, which exposes a quality number and nothing else — whether it
-subsamples is an undocumented detail of whichever Skia build is on the device.
-That turns a non-negotiable into a hope.
-
-`JpegEncoder` makes it a fact, and `JpegEncoderTest` makes it an asserted one: it
-parses the SOF0 marker of real output and checks the sampling factors are 1×1 on
-all three components. Baseline sequential, two-pass optimised Huffman, verified
-round-trip against `ImageIO`.
-
-### 3. No ONNX code. M8 is not built.
-
-This is following the spec, not departing from it. §6.6 ends with an instruction
-and §18 repeats it as open decision 3:
-
-> Before writing any ONNX code: A/B it. Build a Lanczos + unsharp baseline.
-> Compare on ten of your real photos at 100%. If the difference doesn't justify
-> 30 seconds per image and a native dependency, ship the baseline and delete this
-> section.
-
-So what exists is the baseline (`Upscale.LanczosBaseline`), the gate and
-sharpness cap (`Upscale.decide`), the seam a model drops into
-(`Upscale.SuperResolver`), the two treatments that keep a learned upscaler from
-looking synthetic written against that seam (`detailPreservingBlend`,
-`softenSmallFaces`), and the harness that answers the question
-(`UpscaleComparison`). What does not exist is a Real-ESRGAN session, because
-building it first would be doing the work the spec says to justify.
-
-Face detection is downstream of the same decision — see `ModelPolicy` for the
-reasoning. The router degrades rather than breaking without a detector: §6.4's
-portrait rule is `(faceCount > 0 || skinFraction > 0.08)`, and the contiguity
-guard still rejects terracotta.
-
----
-
-## What the tests actually prove
-
-`:core:imaging` carries 46 passing tests. The ones that matter:
-
-- **`LabGoldenTest`** — sRGB primaries land on published CIELAB values; a neutral
-  grey has `a*, b* ≈ 0` and not `≈ 128` (trap #1 stated as an assertion);
-  operating in the wrong colour space throws rather than producing muddy output;
-  the P3 soft-clip keeps gradient in saturated reds instead of flattening them.
-- **`PortraitGradeTest`** — convergence in 3–4 passes at damping 0.7; the §14.2
-  guard rail (`b* ∈ [15,22]`) across eight skin tones; **the correction is
-  identical against neutral, terracotta and blue backgrounds**, which is §6.7's
-  single most important constraint stated as an outcome; the delta is applied
-  globally, not through the mask.
-- **`BandingTest`** — a dithered gradient is clean, *and the same gradient without
-  dither bands*. §14.6 explicitly demands that control, because a banding test
-  that passes with dither disabled is measuring nothing.
-- **`JpegEncoderTest`** — 4:4:4 verified by parsing the file, not by trusting a flag.
-- **`PipelineTest`** — end to end; §14.3 no-regression; a gate failure falls back
-  to the original *and says which gate*; presets hit exact dimensions; a
-  screenshot needs both signals, so a photo at a screen resolution is not one.
-- **`GateEvaluationTest`** — each of the six gates fails on its own threshold and
-  maps to the §6.12 remedy.
-
-### One thing the suite found
-
-The first run of §14.3 failed: Scene was crushing 2.3% of a well-exposed frame
-into shadow. The auto-levels stage was mapping a black point at L\*24 down to
-L\*1, and the gamma and S-curve after it pushed the result past the crush line —
-"adaptive terms overreaching", which is exactly what §14.3 says a large delta
-means. The levels endpoints are now solved against the *composed* tone chain
-rather than their own stage, so the curve cannot manufacture crushed shadows or
-new clipping. See `SceneGrade.COMPOSED_BLACK_FLOOR_L`.
-
-### The device tests (§14.7, §14.8, §14.10)
-
-`:core:data` carries an instrumented suite that runs on API 30 and 35 emulators
-in CI. It exists because §14.10's failure mode is permanent photo loss and it is
-the only part of this app where a bug is not recoverable.
-
-- **`ApprovalGuardTest`** — each of §9.3's five invariants fails *on its own*,
-  with every other condition satisfied. The trap #14 case differs from the
-  passing case by a single boolean. It runs against a real `ContentResolver`
-  with real files in MediaStore, because invariant 3 is "the output still
-  decodes, checked now rather than at write time" and a fake resolver that
-  always returns a valid bitmap asserts nothing.
-- **`OriginalRetentionTest`** — a fallback original is never in deletion batch
-  2; an output that stopped decoding is requeued rather than dropped *or*
-  trashed; `ORIGINAL_TRASHED` is terminal against every other state and
-  `APPROVED` is the only way in; a result replayed after process death logs no
-  second transition. Plus trap #16: the two batches are disjoint.
-- **`CancelledDialogTest`** — §14.8 on both batches. Cancelling leaves every
-  decision present and uncommitted, the retry commits the same set, and a
-  cancelled batch 2 leaves the asset `APPROVED` with `originalTrashedAt` null.
-- **`GradeMemoryTest`** — a 12MP grade completes at full resolution or via
-  §12's half-resolution retry, and a batch graded back to back does not
-  accumulate. It logs the on-device time, which is the only honest answer to
-  §13; CI dumps that logcat into the job output.
-
-They stop at the system dialog: `createTrashRequest` returns a `PendingIntent`
-only the system's confirmation UI can resolve. So the assertions are about which
-asset ids Sift *puts into* a request — the part Sift controls, and the part that
-can be wrong.
-
-**What the first run found.** Two defects, both in the safety path, both
-invisible to 48 green unit tests:
-
-- `APPROVED` listed `ORIGINAL_TRASHED` as its only exit, so §12's
-  `requeueForGrade` — the recovery for an export that stopped decoding — returned
-  false and did nothing. Affected assets sat approved with a broken export
-  forever, re-refused on every batch.
-- `latestForAsset` ordered by `processingMs`, the grade's *duration*. "Latest"
-  therefore meant "slowest". Since `ApprovalGuard` reads that job's `approvedAt`
-  as invariant 5, an asset with more than one job could have a stale approval
-  stand in for consent to a grade the user had never seen — and fixing the first
-  defect is what makes a second job routine. `EditJob` gained `createdAt`
-  (schema v3).
-
-Neither could have been caught without enumerating the state table on a real
-device, which is the argument for this suite existing.
-
-### What is not proven
-
-- **§14.1 golden-image parity is skipped, not passing.** It needs three of your
-  portraits with their committed Python outputs. Drop them into
-  `core/testing/src/main/resources/golden/`, list them in `GoldenFixtures`, and
-  the test turns on. It reports as *skipped* rather than passing vacuously,
-  because a green parity test with no fixtures is worse than none on the one gate
-  §6.2 calls the only defence against the LAB trap.
-- **§13's 12MP budget is missed.** A full-resolution 12MP grade does now run in
-  a 512MB heap — CI reports `4000x3000 … fellBack=false` on API 30 and 35 — but
-  it takes 13s or more there against a 2.5s budget. See
-  [performance](#performance).
-- **UI tests cover one screen, not five.** `PendingScreenTest` drives the bin
-  through its real view model and pins the two 0.2.1 defects, but the deck,
-  review, grid and settings screens have no UI coverage. The bin got tests
-  because that is where a wiring bug shipped; the others are equally exposed to
-  the same class of defect.
-- **§14.4 router accuracy, §14.5 clustering precision/recall** need hand-labelled
-  real photographs; the synthetic fixtures show the mechanisms work, not that the
-  thresholds are right for your library.
-
-### What *is* mechanically enforced
-
-Three properties that would otherwise erode silently are checked by the build,
-and each has been verified to actually fail when violated rather than passing
-vacuously:
-
-- **No network permission (§3).** `verifyNoNetworkPermissionsRelease` reads the
-  *merged* manifest — the one that ships — and fails on `INTERNET`,
-  `ACCESS_NETWORK_STATE` or `ACCESS_WIFI_STATE`. WorkManager pulls
-  `ACCESS_NETWORK_STATE` in through manifest merging; it is removed explicitly,
-  and the guard is what stops the next dependency putting it back.
-- **Room schemas stay committed (§4.2).** CI fails if an entity changed without
-  its schema being regenerated, so migrations never stop being reviewable.
-- **R8 does not strip the serializers.** `derivedParamsJson` and
-  `gateResultsJson` are not optional (§6.3, §5) — a minified build that lost
-  `FrameAnalysis$$serializer` would throw at runtime on the first graded photo.
-  The release APK is checked to still contain them.
-
----
-
-## Performance
-
-§13 budgets a 12MP grade at **2.5s**. It is not met.
-
-Measured on a 4-core x86 JVM (`./gradlew :core:imaging:test -Dsift.bench=true`,
-`PipelineBenchmark`, 4000×3000 portrait, MASTER preset):
-
-| | 12MP grade |
+| Module | |
 |---|---|
-| cold (first frame, JIT warming) | 8.7s |
-| warm median | **5.4s** |
-| §13 budget | 2.5s |
+| `:app` | Compose UI, navigation, view models, WorkManager |
+| `:core:model` | shared immutable types; no dependencies |
+| `:core:imaging` | the grading pipeline; plain Kotlin — no Android, no OpenCV |
+| `:core:ml` | model policy and the upscale A/B harness; no ONNX, deliberately |
+| `:core:data` | Room, MediaStore, DataStore, lifecycle and approval safety |
+| `:core:testing` | synthetic fixtures, and the slot for golden-image fixtures |
+| `docs/` | the spec, the install guide, test evidence, performance history |
+| `dist/` | the signed release APK |
 
-The same benchmark on the 0.1.4 pipeline measured a 12.1s warm median, so this
-is roughly a 2× improvement that still lands at a bit over twice the budget.
-Where it came from, in rough order of contribution:
+## License
 
-- **Row-parallel per-pixel passes** (`Parallel`). Every colour conversion, tone
-  curve, blur and DCT is independent per row and was running on one thread.
-  §4.3's limit of 2 concurrent frames is a cap on how many photos are in flight
-  — a 12MP frame is ~144MB as float and three at once will OOM — not on how
-  many cores may work on one of them. Dither is deliberately excluded: it draws
-  from a seeded RNG in a fixed sequence (§2.3), and reproducibility is what
-  lets `BandingTest` assert anything, so it parallelises over fixed chunks with
-  per-chunk seeds rather than over rows.
-- **sRGB transfer functions became table lookups.** A `pow(x, 1/2.4)` per
-  channel per pixel is 36M calls on a 12MP frame; an 8192-entry LUT with
-  interpolation is within float precision of the exact curve, and the exact
-  form is still used outside [0,1] where §2.1's unbounded values live.
-- **Local contrast blurs at quarter scale** and expands bilinearly. A
-  large-radius low-frequency blur has nothing above the Nyquist limit of the
-  downscaled grid to lose.
-- **The sharpness gate samples** rather than taking a full-resolution Laplacian,
-  and reuses the source's variance when the geometry did not change.
-- **Ingest stopped decoding at full resolution.** The dHash needs 1024px on the
-  long edge, and it was decoding 12MP frames to compute a 64-bit number.
-
-### On a device, the problem is memory before it is time
-
-The instrumented suite measures this on an emulator, and the result was worse
-than the JVM figure suggested:
-
-```
-heap: standard 192MB, large 512MB, max 512MB
-OOM grading 4000x3000: failed to allocate 48MB with 4.4MB until OOM,
-  target footprint 536870912, growth limit 536870912
-```
-
-**A full 12MP grade did not complete in a 512MB heap.** Not "was slow" — it ran
-out of memory 48MB from the end. §12's half-resolution retry then produced a
-2048px image, and the app shipped that as the master. So on hardware in that
-class every large photo was silently downgraded to a quarter of its resolution,
-which is the honest answer to why graded output looked bad.
-
-Peak footprint at 12MP was five full frames alive at once:
-
-| | before | after |
-|---|---|---|
-| decoded bitmap held across the float allocation | 48MB | freed first |
-| source frame | 144MB | 144MB |
-| linear copy of the source | 144MB | *reuses the source* |
-| working copy (needed — retries re-copy from it) | 144MB | 144MB |
-| quantisation copy | 144MB | *quantises in place* |
-| output frame rebuilt from bytes for the gates | 144MB | *gates read the bytes* |
-
-Four of those are gone. The working copy stays because §6.12's retry chain needs
-an untouched frame to start each attempt from, and the source stays because it
-is that frame. `GradeMemoryTest` now **requires** a full-resolution 12MP grade
-rather than accepting either outcome, so a regression here fails the build.
-
-Two related changes: `Pipeline.Request.ownsSource` lets a caller that will not
-reuse its frame have it converted in place — a promise about the caller, not
-about the pipeline, so it defaults to false. And a grade that only fitted at
-reduced resolution is no longer written as a master at all; it is treated as a
-fallback, leaving the original untouched and reporting the count. A 2048px stand
--in for a 12MP photograph could not pass §9.3's invariant 4 anyway, so those
-grades were being refused and requeued to OOM again in a loop.
-
-Timing is unchanged within measurement noise — 5.0s warm median against 5.4s
-before, on a container running at load 3.4. These changes bought resolution, not
-speed.
-
-**It worked, and the device tests now say so rather than the bench.** The first
-run with a correctly-configured `GradeMemoryTest` reports a 4000x3000 grade
-completing with `fellBack=false` on both API 30 (512MB heap) and API 35 (576MB).
-The budget is a different matter: 13-21s across runs, on two emulated cores,
-against §13's 2.5s. Closing that is a different problem — fixed-point,
-tiling, or NDK/SIMD, which reopens the OpenCV decision above.
-
----
-
-## Architecture
-
-```
-:app             Compose UI, navigation, ViewModels, WorkManager
-:core:model      Shared immutable types. No dependencies.
-:core:imaging    The pipeline (§2, §6). Pure Kotlin, no Android, no OpenCV.
-:core:ml         Model policy and the §6.6 A/B harness. No ONNX, deliberately.
-:core:data       Room, MediaStore, DataStore, lifecycle and approval safety.
-:core:testing    Synthetic fixtures and the §14.1 golden slot.
-```
-
-`settings.gradle.kts` includes the Android modules **only when an SDK is
-present**, so `gradle :core:imaging:test` works on a machine that has never
-installed one. That is not a convenience; §4.1 requires the module that
-determines output quality to be exercisable in isolation, and a test suite that
-needs a device attached does not get run.
-
-### The safety-critical path
-
-§9.3 says an original may be trashed only when all five invariants hold, and
-trap #14 calls violating invariant 2 "the one genuinely unrecoverable bug in the
-app". `ApprovalGuard` is the single place that decision is made — one code path
-to audit, one to test. `TrashCoordinator` cannot express a mixed batch: triage
-rejects and approved originals are separate types of request with separate
-confirmation copy, because a user confirming one has not consented to the other
-(trap #16).
-
-`LifecycleRepository` writes every transition to Room *before* any filesystem
-operation, and `ORIGINAL_TRASHED` is terminal in the transition table, so process
-death mid-transition resumes rather than double-trashing.
-
----
-
-## Still open
-
-Carried over from §18, unchanged:
-
-1. **Does upscale survive the §6.6 A/B?** Run `UpscaleComparison` over ten of
-   your photos. It can delete M8 entirely — and if it does, ML Kit becomes the
-   better face-detection dependency.
-2. **Detail-blend percentage.** 15% is committed as the midpoint of the
-   specified 12–18% band, not a measured value. `UpscaleComparison.sweepDetailBlend`
-   exists to settle it.
-3. **Pending-review backlog cap.** Still 300, still a guess.
-
-And one added here:
-
-4. **`OutputSharpen.TARGET_LAPLACIAN_VARIANCE`.** §6.10 asks for an amount
-   "targeting a consistent apparent sharpness", which requires a target to aim
-   at. The current value is defensible, not measured. Same treatment as the
-   detail blend: tune once against real photographs, then commit it.
-5. **UI tests for the remaining screens.** The bin now has them, and they pin
-   the exact defect that shipped. The deck, review, grid and settings screens do
-   not, and they are exposed to the same class of bug: a callback wired to the
-   wrong thing, which no view-model test can see.
-
----
-
-## Licence
-
-MIT.
+MIT — see [LICENSE](LICENSE).
