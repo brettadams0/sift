@@ -6,10 +6,9 @@
 An Android app for clearing a camera roll, with an on-device photo grader that is allowed to
 say no. You swipe through photos to keep or reject them, and the rejects are trashed in one
 confirmation. Each keeper is then measured and given its own correction, and the result has to pass
-six quality gates before it replaces anything; when a gate fails, the original ships untouched. On
-⟦FACT sift-set-size⟧ public-domain portraits, ⟦FACT sift-passed⟧ were graded and passed,
-⟦FACT sift-gate-refused⟧ were graded and then refused by a gate, and ⟦FACT sift-routed-out⟧ were
-routed away from grading altogether. The original is trashed only after you approve the result.
+six quality gates before it replaces anything; when a gate fails, the original ships untouched. Of
+28 public-domain photographs run through the unmodified pipeline, 4 were graded and passed, 14 were
+graded and then refused by a gate, and 10 were wrongly routed away from grading by a bug. The original is trashed only after you approve the result.
 Everything runs on the phone, which ships with **no `INTERNET` permission** — a build step fails
 if one appears. The imaging pipeline is plain Kotlin with no OpenCV, and the machine-learning
 upscaler the spec describes is not built: the spec says to A/B it against a plain baseline first,
@@ -18,45 +17,72 @@ and that A/B has not run.
 **[Download the APK](dist/)** — a signed sideload build for Android 11 or newer (API 30+);
 [install guide](docs/INSTALL.md).
 
+<img src="docs/grade-before-after.webp" width="720" height="239" alt="Two copies of the same photo side by side, labelled before and after (sift). A smiling astronaut with grey-streaked curly hair floats inside a cream-walled space station module in a navy sweatshirt, a crewmate's arm at the left edge. In the after copy, her skin and the wall are slightly brighter and warmer; everything else is unchanged.">
+
 ## Does it know when to leave a photo alone?
 
 A grader run unattended over someone's whole camera roll is only safe if it can tell when it is
 making a photo worse. So the measure here is not how much better the good results look; it is
-whether the bad ones are stopped. The unmodified pipeline was run over ⟦FACT sift-set-size⟧
-CC0 portraits, listed with source URL, licence and sha256 in ⟦FACT sift-manifest-path⟧, and
-recorded what happened to each.
+whether the bad ones are stopped. The pipeline was run exactly as the app calls it — `MASTER`
+preset, no face detector, which is what ships — over 28 photographs in two sets of 14:
 
-<!-- EVIDENCE FIGURE (W3): the grid of all images, each tagged graded / fell back / routed out,
-with its gate numbers; the passing images sit inside it with their ΔE76, ΔL* and Δb*. Not a
-standalone hero. -->
+- **ISS**: NASA snapshots taken aboard the space station under cabin lighting, the closest
+  public-domain stand-in for a phone camera roll.
+- **Stock**: CC0 professional photographs, already graded by whoever published them; 13 portraits
+  and a cat.
 
-| ⟦FACT sift-set-size⟧ CC0 portraits | Images | Measured | Limit |
-|---|---:|---:|---:|
-| Graded and passed every gate | **⟦FACT⟧** | ΔE76 ⟦FACT⟧ | — |
-| Graded, then refused: new clipping | ⟦FACT⟧ | ⟦FACT⟧ | 0.2% |
-| Graded, then refused: shadow crush | ⟦FACT⟧ | ⟦FACT⟧ | 0.2% |
-| Routed out as non-photographic | ⟦FACT⟧ | — | — |
+Every input is pinned by URL, licence and sha256 in
+[`tools/samples/sources.json`](tools/samples/sources.json).
 
-Most of those photos were sent back unchanged, and that is the gates doing their job. The likely
-reason is the input: stock portraits have usually been edited already, so a correction derived
-from the frame has little to fix and some room to clip highlights or crush shadows. The gates
-measured that and shipped the original instead. The limits are the spec's — no more than 0.2% of the frame
-newly clipped, no more than 0.2% newly crushed (§6.12) — and nothing about this run was tuned to pass.
+<img src="docs/grade-outcomes-iss.webp" width="720" height="547" alt="A grid of 14 photos taken aboard the International Space Station: crew portraits, group shots and astronauts at work among cables and equipment. A coloured bar under each photo says what sift did with it. One green 'graded, mean dE76 6.2'. Eight orange 'fell back', each naming the gate it failed, such as 'clipped 5.1% > 0.2%' or 'crushed 1.7% > 0.2%'. Five grey 'routed out, document detector'.">
+
+<img src="docs/grade-outcomes-stock.webp" width="720" height="547" alt="A grid of 14 professionally shot stock photos, 13 of them portraits and one of a tabby cat. A coloured bar under each says what sift did with it. Three green 'graded' with mean dE76 11.6, 9.6 and 19.2. Six orange 'fell back', each naming the gate it failed, such as 'clipped 1.1% > 0.2%' or 'crushed 2.6% > 0.2%'. Five grey 'routed out, document detector', including a black-and-white portrait and the cat.">
+
+| 28 photographs | ISS | Stock | Measured | Limit |
+|---|---:|---:|---:|---:|
+| Graded and passed every gate | 1 | 3 | mean ΔE76 6.2 – 19.2 | — |
+| Graded, then refused: new clipping | | | 9 photos, **1.0 – 5.1%** of the frame | 0.2% |
+| Graded, then refused: shadow crush | | | 5 photos, **0.4 – 2.6%** of the frame | 0.2% |
+| &nbsp;&nbsp;refused in total, original shipped | 8 | 6 | **14 of 28** | |
+| Routed out as non-photographic (a bug) | 5 | 5 | 10 of 28 | |
+
+Fourteen photographs were graded, measured as worse by the spec's own rule, and handed back
+untouched. That is the gates working. Both limits are the spec's — no more than 0.2% of the frame
+newly clipped, no more than 0.2% newly crushed (§6.12) — and nothing was tuned for this run.
 ([`GateResults.kt`](core/model/src/main/kotlin/dev/sift/model/GateResults.kt),
 [`QualityGates.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/QualityGates.kt))
 
+Whether it refuses *too often* is a separate question, and this run doesn't settle it. For the
+stock set, a likely reason is the input: those photographs have already been edited, so a
+correction derived from the frame has little to fix and some room to clip. That explanation
+doesn't cover the ISS set, which is the closer match to a camera roll and was still refused 8
+times in 14, with new clipping reaching 5.1% of the frame against a 0.2% limit.
 <!-- PENDING W1: verdict on whether the 0.2% limits are correctly calibrated or an order of
-magnitude too tight. This paragraph's wording depends on it. -->
+magnitude too tight. This paragraph's conclusion depends on it. -->
 
-The caveat that matters most: **these are stock portraits, not what sift is for.** It targets phone
-camera rolls — auto white balance casts, underexposure — where a frame-derived correction has
-something to correct. Whether it does better there is the open question, and this set says
-nothing about it. A second set from public-domain phone-quality photographs is being measured
-for exactly that reason. ⟦FACT sift-phone-set — results, when they exist⟧
+The four that passed moved a long way: mean ΔE76 of 6.2 on the ISS photograph, and 11.6, 9.6 and
+19.2 on the three stock portraits. All four got lighter, by ΔL\* +4.3 to +18.1, and two shifted
+colour more than they lightened: Δb\* +9.1 (yellower) on one, Δa\* +6.6 (redder) on another. That measures
+how far the pixels moved, not that they moved toward anything better; there is no reference to
+score skin against. Two of the stock grades show it: one picks up a magenta cast in the sky, and
+the 19.2 is a washed-out lift. They pass the gates and are still not good, which is why none of
+them is the picture at the top of this page.
 
-The ⟦FACT sift-routed-out⟧ routed out are a bug, not restraint. ⟦FACT sift-router-defect — W1:
-cause in `isLikelyDocument` and the fix⟧ Genuine portraits were classified as documents and never
-graded. ([`FrameAnalyzer.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/FrameAnalyzer.kt))
+The ten routed out are a bug, not restraint. The document detector, `isLikelyDocument`, classed
+real photographs as documents — five from each set — and they were never graded. One is a
+black-and-white portrait, where skipping the grade is arguably right; the rest are colour
+photographs, and one is the cat. Screenshot detection fired on none of the 28.
+<!-- PENDING W1: cause in isLikelyDocument, and the fix if one lands. -->
+([`FrameAnalyzer.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/FrameAnalyzer.kt))
+
+Caveats: 28 photographs is not a camera roll, and the inputs are 1920 px renders from Wikimedia
+Commons, not camera originals. The per-photo record — outcome, gate, measured value, ΔE76 and its
+L\*, a\*, b\* components — is in [`results/grade-samples.json`](results/grade-samples.json).
+With JDK 17 and Pillow, one command regenerates it and both grids byte for byte:
+
+```sh
+python tools/samples/make_assets.py
+```
 
 ## How it works
 
