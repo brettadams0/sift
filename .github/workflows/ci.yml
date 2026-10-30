@@ -22,27 +22,50 @@ jobs:
   # deliberately free of Android so it can be tested without a device or an SDK
   # (§4.1). Running it as its own job keeps that property honest: if someone
   # introduces an Android dependency into :core:imaging, this job stops working.
+  #
+  # Matrixed over OS and JDK because nothing about this code is Android-specific:
+  # the float maths and the hand-written JPEG encoder should give the same
+  # answers on every JVM, and this is where that gets checked.
   pipeline:
-    name: Imaging pipeline (no Android SDK)
-    runs-on: ubuntu-latest
+    name: Imaging pipeline (no Android SDK, ${{ matrix.os }}, JDK ${{ matrix.java }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        java: ['17', '21']
+    # Every hosted runner image ships an Android SDK and exports its path.
+    # Blanking both is what makes "no Android SDK" true; settings.gradle.kts
+    # treats a blank value as absent.
+    env:
+      ANDROID_HOME: ''
+      ANDROID_SDK_ROOT: ''
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: ${{ matrix.java }}
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # Fails if the Android modules were configured, i.e. if the job is not
+      # actually SDK-free. Without this the job passed while an SDK was present.
       - name: Test the pure-JVM modules
-        run: ./gradlew :core:model:build :core:imaging:test :core:testing:build
+        run: |
+          set -o pipefail
+          ./gradlew :core:model:build :core:imaging:test :core:testing:build | tee gradle.log
+          grep -q 'sift: no Android SDK detected' gradle.log
 
       - name: Publish test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: imaging-test-results
+          name: imaging-test-results-${{ matrix.os }}-jdk${{ matrix.java }}
           path: core/imaging/build/reports/tests/test
           if-no-files-found: ignore
 
@@ -57,7 +80,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -117,7 +140,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
 
       - uses: gradle/actions/setup-gradle@v4
 

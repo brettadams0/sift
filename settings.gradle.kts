@@ -39,9 +39,11 @@ include(":core:testing")
 // Without this guard the Android Gradle Plugin fails at configuration time
 // ("SDK location not found") and takes the pure-JVM modules down with it.
 // ---------------------------------------------------------------------------
+// Blank counts as absent, so CI can hide a runner's preinstalled SDK by setting
+// the variables to "" (GitHub's images set ANDROID_HOME on every OS).
 val androidSdkPresent =
-    System.getenv("ANDROID_HOME") != null ||
-        System.getenv("ANDROID_SDK_ROOT") != null ||
+    !System.getenv("ANDROID_HOME").isNullOrBlank() ||
+        !System.getenv("ANDROID_SDK_ROOT").isNullOrBlank() ||
         file("local.properties").let { it.exists() && it.readText().contains("sdk.dir") }
 
 if (androidSdkPresent) {
