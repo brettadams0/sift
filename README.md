@@ -8,7 +8,7 @@ say no. You swipe through photos to keep or reject them, and the rejects are tra
 confirmation. Each keeper is then measured and given its own correction, and the result has to pass
 six quality gates before it replaces anything; when a gate fails, the original ships untouched. Of
 28 public-domain photographs run through the unmodified pipeline, 4 were graded and passed, 14 were
-graded and then refused by a gate, and 10 were wrongly routed away from grading by a bug. The original is trashed only after you approve the result.
+graded and then refused by a gate, and 10 were wrongly routed away from grading by a bug, since fixed. The original is trashed only after you approve the result.
 Everything runs on the phone, which ships with **no `INTERNET` permission** — a build step fails
 if one appears. The imaging pipeline is plain Kotlin with no OpenCV, and the machine-learning
 upscaler the spec describes is not built: the spec says to A/B it against a plain baseline first,
@@ -56,10 +56,29 @@ newly clipped, no more than 0.2% newly crushed (§6.12) — and nothing was tune
 Every clipping refusal was 5 to 25.5 times the limit (1.0% and 5.1% of the frame against 0.2%).
 The obvious explanation would be the input — stock photographs are already edited, so there is
 little to fix and room to overshoot — and the data rules it out. The ISS set, chosen because it is
-the closer match to a camera roll, did worse: 1 of 14 graded and passed, against 3 of 14 for stock. Either
-the limits are wrong or the grade pushes too hard, and this run alone doesn't say which.
-<!-- PENDING W1: H1 (0.2% limits miscalibrated) vs H2 (grader too aggressive, gates right).
-Finish this paragraph only when the verdict lands. -->
+the closer match to a camera roll, did worse: 1 of 14 graded and passed, against 3 of 14 for stock.
+
+So the limits were tested instead of moved, and they are right. **The grade was too aggressive, and
+the gates caught it.** Re-running the graded photos with every attempt traced: 11 of the 14
+refusals are portraits, and the first attempt lifted skin by +6.7 to +27.5 L\*, then added an
+exposure correction on top, which newly clipped 2.4–10.2% of the frame. Three defects in
+`PortraitGrade` account for it:
+
+- Dim indoor skin, around L\* 40–50, is driven toward a fixed target by +17 to +27 L\*, and the
+  exposure correction stacks on top of that.
+- Exposure is computed from the median *before* the skin lift, so it counts the lift twice.
+  Fixing that alone rescues 1 of the 11.
+- The portrait highlight shoulder aims at L\* 100, while the gate counts anything above L\* 98 as
+  clipped. Scene already stops at 97.5 (`COMPOSED_WHITE_CEILING_L`). Fixing that lowers clipping on
+  two photos and rescues none.
+
+They are named here and not fixed yet. This is the design doing what it is for: a grader is going
+to be wrong sometimes, and a gate that refuses a bad result is what makes running it unattended
+safe. One gap the trace exposed: a refused grade keeps the gate values in its reason, but not the
+parameters it tried, so the app cannot yet explain a refusal from its own records.
+([`PortraitGrade.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/PortraitGrade.kt),
+[`FrameAnalyzer.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/FrameAnalyzer.kt),
+[`SceneGrade.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/SceneGrade.kt))
 
 The four that passed moved a long way: mean ΔE76 of 6.2 on the ISS photograph, and 11.6, 9.6 and
 19.2 on the three stock portraits. All four got lighter, by ΔL\* +4.3 to +18.1, and two shifted
@@ -73,10 +92,17 @@ warmer:
 <img src="docs/grade-before-after.webp" width="720" height="239" alt="Two copies of the same photo side by side, labelled before and after (sift). A smiling astronaut with grey-streaked curly hair floats inside a cream-walled space station module in a navy sweatshirt, a crewmate's arm at the left edge. In the after copy, her skin and the wall are slightly brighter and warmer; everything else is unchanged.">
 
 The ten routed out are a bug, not restraint. The document detector, `isLikelyDocument`, classed
-real photographs as documents — five from each set — and they were never graded. One is a
+real photographs as documents — five from each set — and they were exported ungraded. One is a
 black-and-white portrait, where skipping the grade is arguably right; the rest are colour
-photographs, and one is the cat. Screenshot detection fired on none of the 28.
-<!-- PENDING W1: cause in isLikelyDocument, and the fix if one lands. -->
+photographs, and one is the cat. The cause: the detector requires a bimodal brightness histogram,
+and its floor of 0.55 is below 2/π ≈ 0.64, the score of any normal distribution, so every
+photograph passed it — these measured 0.697–0.850. Edge density passed for all of them too, which
+left low colour as the entire test. The floor is now 0.86; rendered pages of ink on paper measure
+0.869–0.955, and `DocumentDetectionTest` fails four of its five cases at 0.55 and passes them at
+0.86
+([`DocumentDetectionTest.kt`](core/imaging/src/test/kotlin/dev/sift/imaging/DocumentDetectionTest.kt)). The margin is narrow, and the document side of it is rendered pages, not phone photos of
+paper, so a dim, low-contrast photo of a real document may now be graded as a photograph. The grids
+above were made before the fix. Screenshot detection fired on none of the 28.
 ([`FrameAnalyzer.kt`](core/imaging/src/main/kotlin/dev/sift/imaging/FrameAnalyzer.kt))
 
 Caveats: 28 photographs is not a camera roll, and the inputs are 1920 px renders from Wikimedia

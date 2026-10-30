@@ -123,7 +123,7 @@ vacuously:
 ## Milestones
 
 Current build: **0.2.8** (`versionCode` 14). `./gradlew build` is green, and
-`./gradlew assembleRelease` produces a **3.0 MB signed APK** that `apksigner`
+`./gradlew assembleRelease` produces a **3.0 MiB signed APK** that `apksigner`
 verifies as installable across API 30–35.
 Download it from [`dist/`](../dist/).
 
