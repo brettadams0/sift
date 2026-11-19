@@ -1,0 +1,16 @@
+{
+  "generator": "Sift production core/imaging Pipeline.process",
+  "sample": "rocket",
+  "profile": "SCENE",
+  "qualityGates": "passed, no fallback",
+  "rgbMeanAbsoluteDifference": 39.8469,
+  "siftProcessingMs": 120,
+  "sourcePhoto": "https://github.com/scikit-image/scikit-image/blob/v0.25.2/skimage/data/rocket.jpg",
+  "beforeSha256": "183c68215c578bb5a4a3f59374269453fe1da0e10178948352489d3cf58039f9",
+  "siftJpegSha256": "c98c767f156cb8715aed2333f907f4119c8a4f5754b78c714265997d42d4b83f",
+  "geometry": [
+    640,
+    427
+  ],
+  "coverOperation": "Identical geometric crop and resize; left half original, right half unaltered Sift JPEG pixels. Labels and wipe only."
+}
