@@ -58,6 +58,9 @@ jobs:
           java-version: '17'
 
       - uses: android-actions/setup-android@v3
+        with:
+          # The default includes the obsolete SDK package "tools".
+          packages: platform-tools
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -118,6 +121,9 @@ jobs:
           java-version: '17'
 
       - uses: android-actions/setup-android@v3
+        with:
+          # The default includes the obsolete SDK package "tools".
+          packages: platform-tools
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -155,6 +161,23 @@ jobs:
           # single invocation, the variable survives and the exit code is real.
           script: ./gradlew :core:data:connectedDebugAndroidTest :app:connectedDebugAndroidTest; status=$?; echo "::group::On-device measurements (§13)"; adb logcat -d -s SiftGradeMemoryTest:I SiftMediaStore:I || true; echo "::endgroup::"; exit $status
 
+      - name: Verify both modules ran instrumented tests
+        shell: python
+        run: |
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          for module in ("core/data", "app"):
+              results = Path(module, "build/outputs/androidTest-results/connected")
+              cases = [
+                  case for report in results.rglob("TEST-*.xml")
+                  for case in ElementTree.parse(report).iter("testcase")
+                  if case.find("skipped") is None
+              ]
+              if not cases:
+                  raise SystemExit(f"No executed instrumented tests found in {results}")
+              print(f"{module}: {len(cases)} instrumented tests executed")
+
       - name: Publish instrumented test report
         if: always()
         uses: actions/upload-artifact@v4
@@ -163,4 +186,6 @@ jobs:
           path: |
             core/data/build/reports/androidTests/connected
             app/build/reports/androidTests/connected
-          if-no-files-found: ignore
+            core/data/build/outputs/androidTest-results/connected/**/TEST-*.xml
+            app/build/outputs/androidTest-results/connected/**/TEST-*.xml
+          if-no-files-found: error

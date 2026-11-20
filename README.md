@@ -15,10 +15,12 @@ Built to [`SIFT_SPEC.md`](docs/SIFT_SPEC.md) v3.
 
 ## Status
 
-Current build: **0.2.8** (`versionCode` 14). `./gradlew build` is green, and
-`./gradlew assembleRelease` produces a **3.0 MB signed APK** that `apksigner`
-verifies as installable across API 30–35.
-Download it from [`dist/`](dist/).
+**0.2.8** (`versionCode` 14) is available as a [signed 3.0 MB APK](dist/)
+for Android 11 and later. The [0.2.8 verification run](https://github.com/brettadams0/sift/actions/runs/32042903316)
+passed assembly, the release manifest and Room schema checks, and the API 30
+and 35 device tests at `2325c68`. Check the [CI runs for main](https://github.com/brettadams0/sift/actions/workflows/ci.yml?query=branch%3Amain)
+for the status of newer revisions. CI builds without the release keystore
+use the debug signing key. Use the APK in `dist/` for upgrades.
 
 | Milestone | Deliverable | State |
 |---|---|---|
