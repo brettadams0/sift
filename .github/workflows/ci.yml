@@ -57,10 +57,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
-        with:
-          # The default includes the obsolete SDK package "tools".
-          packages: platform-tools
+      - uses: android-actions/setup-android@v4
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -120,10 +117,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
-        with:
-          # The default includes the obsolete SDK package "tools".
-          packages: platform-tools
+      - uses: android-actions/setup-android@v4
 
       - uses: gradle/actions/setup-gradle@v4
 
